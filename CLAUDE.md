@@ -88,17 +88,17 @@ Built in 14 phases, one at a time, each verified before the next starts.
 | 3 | PDF ingestion | done |
 | 4 | Embeddings + policy FAISS index | done |
 | 5 | Policy RAG | done |
-| 6 | Company FAISS index | next |
-| 7 | Portfolio database | pending |
-| 8 | Portfolio-aware RAG | pending |
-| 9 | News ingestion (RSS) | pending |
+| 6 | Company FAISS index | done |
+| 7 | Portfolio database | done |
+| 8 | Portfolio-aware RAG | done |
+| 9 | News ingestion (RSS) | next |
 | 10 | Alert engine | pending |
 | 11 | FastAPI endpoints | pending |
 | 12 | React frontend | pending |
 | 13 | Tests | pending |
 | 14 | README + demo | pending |
 
-Test suite currently: **139 passing** in the default run (about 25 s), plus 3
+Test suite currently: **234 passing** in the default run (about 25 s), plus 4
 `slow` tests that run real local generation and are excluded unless you ask for
 them with `pytest -m slow` (about 2 minutes). Live tests skip themselves when
 Ollama is not running.
@@ -361,6 +361,52 @@ and cannot be monkeypatched.
   score, and the filler scores *well*. Possible directions, none tried: skip
   the front-of-book sections at ingest, weight chunks containing figures, or
   rerank retrieved chunks before they reach the model.
+- **The two models disagree about what counts as an answer, and the bigger one
+  is the more conservative.** Asked whether commercial-bank deposit rules affect
+  an FMCG holding, qwen3:1.7b answers ("the rules pertain to banks' deposit
+  rates... the portfolio's financials are not addressed", `AFFECTED: none`)
+  while qwen3:4b labels the same finding `NOT_COVERED` and then explains it
+  better ("the rules affect banks' deposit policies generally, while Godrej's
+  fixed deposits are existing assets not tied to the new regulations"). Neither
+  invents a link, so both are honest; they differ only in whether "no impact" is
+  an answer or a refusal. This inverts the usual expectation that the larger
+  model gives the fuller response, and it matters downstream: **Phases 10 and 11
+  must not treat `covered=False` as "nothing to show the user"**, because on 4b
+  the refusal text routinely contains the finding. Show the reason, not just the
+  label.
+- **No-impact answers cite nothing, on both models. No fix yet.** Whenever the
+  conclusion is that a holding is unaffected, the answer comes back with no
+  `[n]` citations and `grounded=False` — measured on 1.7b and on 4b, so this is
+  not the small-model citation weakness noted above. The citation rule appears
+  to weaken exactly when there is no positive claim to attach a source to.
+  The consequence is uncomfortable and worth stating plainly: **the assessments
+  Phase 10 will raise alerts from are the least verifiable ones the system
+  produces.** An alert saying "no action needed" that cites nothing cannot be
+  checked by the person receiving it. Untried directions: require a citation for
+  the sources examined rather than only for claims made, or have the alert
+  engine fall back to the retrieved source list when `grounded` is false.
+
+### The Phase 8 prompt, and why it over-refuses
+
+Four revisions, each verified on qwen3:4b. Every instruction that made the
+output easier to parse also licensed the model to produce less of it:
+
+| version | change | qwen3:4b result |
+|---|---|---|
+| v1 | no declared impact line; scan the prose for held tickers | `affected` reported the **opposite** of the answer — "GODREJCP is unaffected" names the ticker, so it was listed as affected |
+| v2 | model declares a closing `AFFECTED:` line | impact correct, but it **refused** a question it could answer |
+| v3 | added: "no impact" is an answer, not a refusal | **collapsed** — neither refused nor explained, replying with a bare `AFFECTED: none` |
+| v4 | shipped | say so **and cite the sources that show it**; one to four full sentences, never a bare verdict |
+
+v4 still labels a no-impact finding `NOT_COVERED` on 4b. That was accepted
+rather than tuned away, for two reasons. **Over-refusal is the least harmful of
+the four failures**: a user who reads "the sources do not cover this" goes and
+looks, whereas one who reads a bare "no impact", or an affected-list
+contradicting the text above it, has been actively misinformed — and under v4
+the refusal text still contains the finding, so only the heading is cautious.
+**And a fifth revision would have been overfitting**: the differences were being
+judged on two test questions, which is tuning to a sample, not engineering.
+
 - **Company chunks score lower than policy chunks.** 0.38-0.47 against
   0.47-0.68, so the 0.35 absolute floor sits close to genuine matches and the
   relative ratio is doing nearly all the filtering. Worth rechecking when more

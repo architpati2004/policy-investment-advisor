@@ -49,6 +49,11 @@ from backend.rag.vector_store import SearchResult
 
 #: Exact token the model emits when the sources cannot answer the question.
 NOT_COVERED = "NOT_COVERED"
+#: Line prefix the model ends a portfolio assessment with. Parsed in code for
+#: the same reason as NOT_COVERED: reading impact out of prose cannot tell
+#: "GODREJCP is exposed" from "GODREJCP is unaffected", and both name the
+#: ticker. A declared line can say "none" and mean it.
+AFFECTED_PREFIX = "AFFECTED:"
 
 POLICY_SYSTEM_PROMPT = f"""\
 You answer strictly from the numbered sources. Cite as [1], [2].
@@ -106,13 +111,119 @@ def build_messages(question: str, results: list[SearchResult]) -> list[tuple[str
     ]
 
 
+def _refusal_line(answer: str) -> str | None:
+    """The line carrying the refusal sentinel, wherever the model put it."""
+    for line in answer.splitlines():
+        if line.strip().upper().startswith(NOT_COVERED):
+            return line
+    return None
+
+
 def is_refusal(answer: str) -> bool:
-    """True when the model declined to answer from the sources."""
-    return answer.strip().upper().startswith(NOT_COVERED)
+    """True when the model declined to answer from the sources.
+
+    Checked per line rather than only at the very start of the reply. Asked for
+    both a refusal sentinel and a closing ``AFFECTED:`` line, qwen3:1.7b emitted
+    them in the opposite order — ``AFFECTED: none`` first, the refusal second —
+    and a reply that merely *starts* with something else is still a refusal. A
+    parser that depends on the model's ordering will eventually read a refusal
+    as an answer, which is the one direction this must never fail in.
+    """
+    return _refusal_line(answer) is not None
 
 
 def refusal_detail(answer: str) -> str:
     """The model's one-line explanation of what the sources were missing."""
-    text = answer.strip()
-    _, _, detail = text.partition(":")
+    line = _refusal_line(answer)
+    if line is None:
+        return "the retrieved sources do not cover this question"
+    _, _, detail = line.partition(":")
     return detail.strip() or "the retrieved sources do not cover this question"
+
+
+# --- Portfolio impact (Phase 8) ----------------------------------------------
+
+PORTFOLIO_SYSTEM_PROMPT = f"""\
+You assess how regulation and company disclosure bear on one specific \
+portfolio, strictly from the numbered sources.
+Cite every claim as [1], [2], and name affected holdings by ticker.
+Sources bind only the institutions, instruments and companies they name. If \
+nothing in the sources bears on a holding, say so and cite the sources that \
+show it, rather than inferring a connection.
+Reply {NOT_COVERED}: followed by what is missing only when the sources do not \
+address the question at all.
+Answer in one to four full sentences, never a bare verdict: no preamble, no \
+reasoning, no restating the question.
+End with one final line, exactly: {AFFECTED_PREFIX} followed by the tickers the \
+sources show are affected, comma separated, or the word none.
+"""
+
+PORTFOLIO_TEMPLATE = """\
+Portfolio:
+{portfolio}
+
+Sources:
+{sources}
+
+Question: {question}"""
+
+
+def format_holdings(holdings: list[Any]) -> str:
+    """Render the portfolio for the prompt.
+
+    Ticker, name and sector, because all three are how a source can connect to a
+    holding: a filing names the company, while a regulation usually names only
+    an industry. Weights are included so "which of my holdings" can be answered
+    with some sense of proportion, and are cost-basis shares, not valuations.
+    """
+    if not holdings:
+        return "(no holdings)"
+    return "\n".join(
+        f"- {holding.ticker} ({holding.name}), sector {holding.sector}, "
+        f"{holding.weight}% of cost"
+        for holding in holdings
+    )
+
+
+def format_context(chunks: list[Any]) -> str:
+    """Render merged context, labelled by which index each chunk came from.
+
+    The label is what lets the model line a rule up against a holding: a source
+    marked ``HOLDING GODREJCP`` is the company's own disclosure, while ``POLICY``
+    is a regulator writing about an industry that may or may not include it.
+    """
+    rendered = []
+    for number, chunk in enumerate(chunks, 1):
+        metadata = chunk.metadata
+        if chunk.origin == "holding":
+            label = f"HOLDING {metadata.get('company', 'unknown')}"
+        else:
+            label = "POLICY"
+        header = f"[{number}] {label} — {display_title(metadata)}"
+        page = metadata.get("page")
+        if page is not None:
+            header = f"{header}, page {page}"
+        date = metadata.get("date")
+        if date:
+            header = f"{header}, dated {date}"
+        rendered.append(f"{header}\n{' '.join(chunk.result.text.split())}")
+    return "\n\n".join(rendered)
+
+
+def build_portfolio_messages(
+    question: str,
+    holdings: list[Any],
+    chunks: list[Any],
+) -> list[tuple[str, str]]:
+    """Assemble the chat messages for one portfolio impact question."""
+    return [
+        ("system", PORTFOLIO_SYSTEM_PROMPT),
+        (
+            "human",
+            PORTFOLIO_TEMPLATE.format(
+                portfolio=format_holdings(holdings),
+                sources=format_context(chunks),
+                question=question.strip(),
+            ),
+        ),
+    ]

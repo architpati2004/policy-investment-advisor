@@ -34,8 +34,8 @@ So relevance is filtered in two ways here, and refused in a third elsewhere:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Callable, Literal, Sequence
 
 from backend.config import Settings, get_settings
 from backend.logging_config import get_logger
@@ -272,3 +272,102 @@ def _describe_scope(
     if sectors:
         parts.append(f"sectors {', '.join(sectors)}")
     return " and ".join(parts) if parts else "the whole index"
+
+
+# --- Merging two corpora -----------------------------------------------------
+
+#: Where a chunk came from. Not cosmetic: an impact assessment has to connect a
+#: rule to a holding, so the model must be able to tell which is which.
+Origin = Literal["policy", "holding"]
+
+
+@dataclass(frozen=True)
+class ContextChunk:
+    """A retrieved chunk, tagged with the index it came from."""
+
+    result: SearchResult
+    origin: Origin
+
+    @property
+    def score(self) -> float:
+        return self.result.score
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return self.result.metadata
+
+
+@dataclass(frozen=True)
+class MergedContext:
+    """Context assembled from both indexes, policy first."""
+
+    chunks: list[ContextChunk] = field(default_factory=list)
+    policy_reason: str | None = None
+    company_reason: str | None = None
+
+    @property
+    def has_context(self) -> bool:
+        return bool(self.chunks)
+
+    def of(self, origin: Origin) -> list[ContextChunk]:
+        return [chunk for chunk in self.chunks if chunk.origin == origin]
+
+    @property
+    def reasons(self) -> list[str]:
+        """Why a side contributed nothing, for explaining a thin answer."""
+        return [reason for reason in (self.policy_reason, self.company_reason) if reason]
+
+
+def merge_context(
+    policy: Retrieval,
+    company: Retrieval,
+    limit: int,
+) -> MergedContext:
+    """Combine policy and company chunks, guaranteeing each corpus a share.
+
+    Merging by raw score does not work here, and the reason is measured rather
+    than theoretical: the two corpora do not share a score scale. Asking "how do
+    the new RBI deposit rate rules affect my holdings?" scores policy chunks at
+    0.49-0.51 and company chunks at 0.40-0.43; asking "what regulatory changes
+    affect consumer goods companies?" reverses it, 0.33-0.35 against 0.42-0.47.
+    Sorting the union by score gave a 5-0 split one way on the first question
+    and 0-5 the other way on the second — one corpus shut the other out every
+    time.
+
+    An impact assessment needs both halves in front of the model at once: the
+    rule that changed, and the holding it might bear on. So each side is
+    guaranteed roughly half the slots, and whatever one side does not use is
+    handed to the other, which keeps a portfolio-only or policy-only question
+    from wasting context on an empty reservation. An odd remaining slot goes to
+    policy, since the regulation is what the question is usually *about* and the
+    holding is what it is measured against.
+    """
+    if limit < 1:
+        return MergedContext(policy_reason=policy.reason, company_reason=company.reason)
+
+    reserved = max(1, limit // 2)
+    policy_taken = policy.results[:reserved]
+    company_taken = company.results[:reserved]
+
+    # Hand the unused half of one reservation to the other side.
+    spare = limit - len(policy_taken) - len(company_taken)
+    if spare > 0:
+        policy_taken += policy.results[len(policy_taken) : len(policy_taken) + spare]
+        spare = limit - len(policy_taken) - len(company_taken)
+    if spare > 0:
+        company_taken += company.results[len(company_taken) : len(company_taken) + spare]
+
+    chunks = [ContextChunk(result, "policy") for result in policy_taken]
+    chunks += [ContextChunk(result, "holding") for result in company_taken]
+
+    logger.info(
+        "Merged context: %d policy, %d company chunks (limit %d)",
+        len(policy_taken),
+        len(company_taken),
+        limit,
+    )
+    return MergedContext(
+        chunks=chunks,
+        policy_reason=policy.reason,
+        company_reason=company.reason,
+    )
