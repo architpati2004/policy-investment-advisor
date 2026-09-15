@@ -58,7 +58,16 @@ MANIFEST_FILENAME = "manifest.json"
 #: Unit-length vectors plus an inner-product index gives cosine similarity.
 DISTANCE_STRATEGY = DistanceStrategy.MAX_INNER_PRODUCT
 #: Over-fetch when a metadata filter is in play, so filtering cannot starve top-k.
-FILTER_FETCH_MULTIPLIER = 4
+#:
+#: FAISS filters *after* searching: it takes ``fetch_k`` nearest chunks and then
+#: discards those failing the filter. On a company index holding thousands of
+#: chunks across many companies, a filter narrowing to one holding can easily
+#: find that all of a small ``fetch_k`` belongs to somebody else, and return
+#: nothing for a company that is plainly in the index. So a filtered search
+#: sweeps wide.
+FILTER_FETCH_MULTIPLIER = 20
+#: Floor for a filtered sweep, regardless of how small ``k`` is.
+MIN_FILTER_FETCH = 200
 
 
 @dataclass(frozen=True)
@@ -340,7 +349,7 @@ class VectorIndex:
         *,
         k: int | None = None,
         min_score: float | None = None,
-        filter: dict[str, Any] | None = None,
+        filter: dict[str, Any] | Callable[[dict[str, Any]], bool] | None = None,
     ) -> list[SearchResult]:
         """Return the closest chunks to ``query``, best match first.
 
@@ -350,8 +359,9 @@ class VectorIndex:
             min_score: Drop results below this cosine similarity; defaults to
                 ``MIN_RELEVANCE_SCORE``. Pass ``0.0`` to see everything, which
                 is what the CLI does when tuning the threshold.
-            filter: Metadata equality filter, e.g. ``{"source": "RBI"}``.
-                Phase 8 uses it to restrict retrieval to a holding's sector.
+            filter: Metadata equality filter (``{"company": "GODREJCP"}``) or a
+                predicate over the metadata dict, which is what expresses "this
+                company *or* this sector" — an equality dict can only say *and*.
 
         Raises:
             IndexNotFoundError: the index has not been built yet.
@@ -362,11 +372,17 @@ class VectorIndex:
         if k < 1:
             return []
 
+        if filter is None:
+            fetch_k = k
+        else:
+            # Never sweep beyond the index; FAISS is happy to, but it wastes work.
+            fetch_k = min(max(k * FILTER_FETCH_MULTIPLIER, MIN_FILTER_FETCH), self.count())
+
         matches = store.similarity_search_with_score(
             query,
             k=k,
             filter=filter,
-            fetch_k=max(k * FILTER_FETCH_MULTIPLIER, k),
+            fetch_k=max(fetch_k, k),
         )
 
         results = [

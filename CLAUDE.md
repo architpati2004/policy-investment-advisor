@@ -86,9 +86,9 @@ Built in 14 phases, one at a time, each verified before the next starts.
 | 1 | Project structure + environment | done |
 | 2 | Local Ollama connection | done |
 | 3 | PDF ingestion | done |
-| 4 | Embeddings + policy FAISS index | next |
-| 5 | Policy RAG | pending |
-| 6 | Company FAISS index | pending |
+| 4 | Embeddings + policy FAISS index | done |
+| 5 | Policy RAG | done |
+| 6 | Company FAISS index | next |
 | 7 | Portfolio database | pending |
 | 8 | Portfolio-aware RAG | pending |
 | 9 | News ingestion (RSS) | pending |
@@ -98,8 +98,10 @@ Built in 14 phases, one at a time, each verified before the next starts.
 | 13 | Tests | pending |
 | 14 | README + demo | pending |
 
-Test suite currently: **66 passing** (65 unit + 1 live-inference integration
-test that skips itself when Ollama is not running).
+Test suite currently: **139 passing** in the default run (about 25 s), plus 3
+`slow` tests that run real local generation and are excluded unless you ask for
+them with `pytest -m slow` (about 2 minutes). Live tests skip themselves when
+Ollama is not running.
 
 ## 6. Current file structure
 
@@ -291,17 +293,55 @@ and cannot be monkeypatched.
 
 ## 11. Known issues and open decisions
 
-- **Generation latency.** 69.8 s cold. Qwen3 performs internal reasoning before
-  answering, which grounded retrieval answers do not need. Options: disable
-  thinking mode in the chat model, or drop to `qwen3:1.7b`. To be addressed in
-  Phase 5.
+- **Develop on `qwen3:1.7b`, judge quality on `qwen3:4b`.** Measured over the
+  same corpus, retrieval and prompt: 1.7b averages 25.9 s against 4b's 124.6 s
+  (max 69 s against 285 s). Answer-versus-refuse routing is identical — 1.7b
+  refused every out-of-corpus question put to it — so the retrieval path, the
+  relevance floors and the refusal logic can all be developed on it. What
+  degrades is **grounding**: 1.7b cites loosely (it shotgun-cited all five
+  sources on one question) and sometimes cites nothing at all, so
+  **`grounded=False` is not trustworthy on 1.7b** — it is often a small-model
+  artefact rather than a real ungrounded answer. `.env` ships with 1.7b; switch
+  `LLM_MODEL` to `qwen3:4b` before judging answer quality or recording a demo.
+- **Never tune `prompts.py` on 1.7b.** Any change to the grounding prompt, and
+  any judgement about refusal or citation behaviour, must be verified on 4b.
+  The two models fail differently, and a prompt tuned to satisfy the small one
+  can quietly cost precision on the large one. Measure, do not assume: prompt
+  wording dominates local latency here — an early five-rule draft of the system
+  prompt generated 2237 tokens where the four-line version generates 259, which
+  was 265 s against 45 s for the same question with the same context.
+- **`LLM_TIMEOUT_SECONDS` must be raised to ~300 when running 4b.** At the
+  default 180 s, 4b genuinely fails a question it can answer: "what is the
+  penalty for premature withdrawal of a term deposit?" needs 285 s. 180 s is
+  ample for 1.7b.
+- **A streamed generation has no total time limit of its own.** The timeout in
+  `client_kwargs` is an httpx timeout, and httpx bounds a *single read* — the
+  gap between two tokens — not the call. `ChatOllama.invoke` streams
+  internally, tokens arrive every few tens of milliseconds, and a 227 s
+  generation therefore sailed straight past a 180 s setting. `invoke_messages`
+  now consumes the stream itself and enforces a wall clock between chunks,
+  raising `LLMTimeoutError` and closing the stream, which disconnects the client
+  and is what actually tells Ollama to stop generating. The httpx timeout still
+  covers the other case underneath: a server that never sends a first token.
+- **Disabling Qwen3's thinking mode is counterproductive.** `reasoning=False`
+  does not stop the model reasoning; it stops Ollama separating the reasoning
+  out, so 1300-1900 characters of chain-of-thought land in the answer body.
+  Leave `LLM_REASONING` unset and control length through the prompt.
 - **`strip_repeated_lines` is heuristic.** Threshold 60% of pages, minimum four
   pages. If genuine content ever disappears, that is the knob.
-- **Only tested against a synthetic PDF.** Real circulars have tables, footnotes
-  and multi-column layouts that may need cleaning adjustments.
+- **Real circulars are bilingual.** RBI PDFs carry a Devanagari letterhead on
+  every page. `strip_repeated_lines` removes it on documents of four pages or
+  more (verified: 1 of 62 chunks on a 25-page Direction still carries any), but
+  one- and two-page circulars fall under its minimum and keep theirs.
+- **No absolute relevance score can separate the adjacent case.** Asking about
+  NBFC deposit rules retrieves commercial-bank deposit rules at 0.539 — above
+  three questions the corpus genuinely answers. `MIN_RELEVANCE_SCORE` (0.35)
+  only rejects questions the corpus is not about at all; the prompt's
+  applicability rule is what refuses the near-miss.
 - **macOS 14 is past Homebrew's support window.** Ollama had to be installed from
   ollama.com rather than Homebrew, which wanted to compile it from source.
-- **No version control yet.** `git init` is recommended before Phase 4.
+- **Tables in annual reports are untested.** Phase 6 ingests a 589-page
+  company report; multi-column financial tables may need cleaning work.
 
 ## 12. What Phase 4 must deliver
 

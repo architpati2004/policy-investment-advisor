@@ -79,9 +79,9 @@ class LLMTimeoutError(OllamaError):
 
     status_code = 504
 
-    def __init__(self, model: str, timeout_seconds: int) -> None:
+    def __init__(self, model: str, timeout_seconds: float) -> None:
         super().__init__(
-            f"Model '{model}' did not respond within {timeout_seconds}s",
+            f"Model '{model}' did not respond within {timeout_seconds:g}s",
             remediation=(
                 "Local inference is slow on first load. Raise LLM_TIMEOUT_SECONDS "
                 "in .env, or switch LLM_MODEL to a smaller model such as qwen3:1.7b."
@@ -223,3 +223,37 @@ class IndexCorruptError(VectorStoreError):
         )
         self.name = name
         self.directory = directory
+
+
+# --- Company data ------------------------------------------------------------
+
+
+class InvalidRegistryError(DocumentError):
+    """The company registry is malformed."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            f"Company registry is invalid: {detail}",
+            remediation=(
+                "Fix data/companies/registry.json — a JSON list of objects with "
+                "'ticker', 'name', 'sector' and optional 'aliases'."
+            ),
+        )
+
+
+class UnknownCompanyError(DocumentError):
+    """A company document cannot be attributed to a company.
+
+    Indexing it anyway would put a chunk in the company index that no holding
+    can ever match, and that nothing can honestly cite.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"Cannot tell which company '{path}' belongs to",
+            remediation=(
+                "Add it to data/companies/registry.json (ticker, name, sector, "
+                "aliases), or pass --company and --sector on the command line."
+            ),
+        )
+        self.path = path

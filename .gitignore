@@ -14,6 +14,8 @@ venv/
 data/**/*.pdf
 !data/policies/SAMPLE_*.pdf
 data/**/*.json
+# The company registry is configuration, not scraped data: it is committed.
+!data/companies/registry.json
 data/**/*.jsonl
 data/*.db
 *.sqlite3

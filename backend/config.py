@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_timeout_seconds: int = 180
     llm_num_ctx: int = 8192
+    #: ``None`` leaves the model's own default. Measured on qwen3:4b: setting
+    #: this to False does not stop the model reasoning, it stops Ollama
+    #: separating the reasoning out, so the chain of thought lands in the answer.
+    #: Terse prompting, not this flag, is what cut latency (52s -> 30s).
+    llm_reasoning: bool | None = None
     #: Texts sent to the embedding model per request. Ollama embeds a batch
     #: sequentially, so this trades peak memory against per-request overhead;
     #: 16 keeps an M1 responsive while indexing a few hundred chunks.
@@ -61,7 +66,16 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 150
     retrieval_top_k: int = 5
-    min_relevance_score: float = 0.25
+    #: Absolute floor: below this a question is not about this corpus at all.
+    #: Measured against the real corpus — unrelated questions (GST, income tax)
+    #: peak at 0.28, while the weakest question the corpus genuinely answers
+    #: reaches 0.47. A property of the embedding model's scale, so it does not
+    #: need retuning as the corpus grows.
+    min_relevance_score: float = 0.35
+    #: Relative floor: keep chunks scoring at least this fraction of the best
+    #: match. This is the part that scales — as the corpus grows and the best
+    #: match improves, the bar rises with it.
+    relative_relevance_ratio: float = 0.75
 
     # --- Storage locations (relative paths resolve to the project root) ----
     data_dir: str = "data"
