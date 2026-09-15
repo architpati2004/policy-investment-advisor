@@ -19,6 +19,7 @@ data/*.db
 *.sqlite3
 backend/vectorstore/**/*.faiss
 backend/vectorstore/**/*.pkl
+backend/vectorstore/**/manifest.json
 
 # Frontend
 node_modules/

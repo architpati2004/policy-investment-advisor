@@ -145,3 +145,81 @@ class EmptyDocumentError(DocumentError):
             ),
         )
         self.path = path
+
+
+# --- Embeddings --------------------------------------------------------------
+
+
+class EmbeddingError(OllamaError):
+    """The embedding model was reached but embedding failed."""
+
+    def __init__(self, model: str, detail: str) -> None:
+        super().__init__(
+            f"Embedding failed for model '{model}': {detail}",
+            remediation="Check the 'ollama serve' terminal for the underlying error.",
+        )
+        self.model = model
+
+
+# --- Vector store ------------------------------------------------------------
+
+
+class VectorStoreError(AdvisorError):
+    """Base for anything wrong with a FAISS index on disk."""
+
+    status_code = 500
+
+
+class IndexNotFoundError(VectorStoreError):
+    """A query arrived before the index it needs was built."""
+
+    status_code = 404
+
+    def __init__(self, name: str, directory: str) -> None:
+        super().__init__(
+            f"The {name} index has not been built yet (looked in {directory})",
+            remediation="Run: python scripts/build_policy_index.py build",
+        )
+        self.name = name
+        self.directory = directory
+
+
+class IndexModelMismatchError(VectorStoreError):
+    """The index on disk was written by a different embedding model.
+
+    Vectors from two different models share no geometry, so searching an index
+    with the wrong model returns confident nonsense rather than an obvious
+    failure. Refusing to load is the only safe response.
+    """
+
+    status_code = 409
+
+    def __init__(self, name: str, indexed_model: str, configured_model: str) -> None:
+        super().__init__(
+            f"The {name} index was built with embedding model '{indexed_model}', "
+            f"but EMBEDDING_MODEL is now '{configured_model}'",
+            remediation=(
+                "Rebuild the index with the current model: "
+                "python scripts/build_policy_index.py build --rebuild"
+            ),
+        )
+        self.name = name
+        self.indexed_model = indexed_model
+        self.configured_model = configured_model
+
+
+class IndexCorruptError(VectorStoreError):
+    """The index files exist but cannot be read back."""
+
+    status_code = 500
+
+    def __init__(self, name: str, directory: str, detail: str) -> None:
+        super().__init__(
+            f"The {name} index at {directory} could not be loaded: {detail}",
+            remediation=(
+                "Delete the directory's index files and rebuild: "
+                "python scripts/build_policy_index.py build --rebuild"
+            ),
+        )
+        self.name = name
+        self.directory = directory

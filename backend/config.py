@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_timeout_seconds: int = 180
     llm_num_ctx: int = 8192
+    #: Texts sent to the embedding model per request. Ollama embeds a batch
+    #: sequentially, so this trades peak memory against per-request overhead;
+    #: 16 keeps an M1 responsive while indexing a few hundred chunks.
+    embedding_batch_size: int = 16
 
     # --- Chunking and retrieval -------------------------------------------
     chunk_size: int = 1000

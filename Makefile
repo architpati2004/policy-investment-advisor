@@ -1,4 +1,4 @@
-.PHONY: help setup env models run test verify verify-ollama clean frontend-setup
+.PHONY: help setup env models run test verify verify-ollama index index-stats clean frontend-setup
 
 help:
 	@echo "setup          Create .venv and install backend dependencies"
@@ -8,6 +8,8 @@ help:
 	@echo "test           Run the test suite"
 	@echo "verify         Run the Phase 1 setup checker"
 	@echo "verify-ollama  Check the local Ollama connection"
+	@echo "index          Build the policy FAISS index from data/policies/"
+	@echo "index-stats    Describe the policy index on disk"
 	@echo "clean          Remove caches and the virtualenv"
 
 setup:
@@ -33,6 +35,12 @@ verify:
 
 verify-ollama:
 	./.venv/bin/python scripts/check_ollama.py
+
+index:
+	./.venv/bin/python scripts/build_policy_index.py build
+
+index-stats:
+	./.venv/bin/python scripts/build_policy_index.py stats
 
 clean:
 	rm -rf .venv .pytest_cache .ruff_cache
