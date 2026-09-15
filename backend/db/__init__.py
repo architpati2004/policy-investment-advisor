@@ -1,1 +1,1 @@
-"""SQLAlchemy models and session management (Phase 7)."""
+"""Portfolio persistence: SQLAlchemy models, sessions and operations (Phase 7)."""

@@ -257,3 +257,35 @@ class UnknownCompanyError(DocumentError):
             ),
         )
         self.path = path
+
+
+# --- Portfolio ---------------------------------------------------------------
+
+
+class PortfolioError(AdvisorError):
+    """Something is wrong with a portfolio or an operation on it."""
+
+    status_code = 400
+
+
+class UnknownTickerError(PortfolioError):
+    """A holding names a company the system has never heard of.
+
+    Refused rather than stored: a holding whose ticker matches no company has
+    no sector, so it can never be matched to a policy change, and it would sit
+    in the portfolio looking as though it were being watched.
+    """
+
+    status_code = 404
+
+    def __init__(self, ticker: str, known: list[str] | None = None) -> None:
+        available = ", ".join(known) if known else "none"
+        super().__init__(
+            f"'{ticker}' is not a known company (known: {available})",
+            remediation=(
+                "Declare it in data/companies/registry.json, then run: "
+                "python scripts/portfolio.py sync"
+            ),
+        )
+        self.ticker = ticker
+        self.known = known or []
