@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Secrets / local config
+.env
+
+# Local data, indexes and databases (rebuildable artifacts)
+data/**/*.pdf
+!data/policies/SAMPLE_*.pdf
+data/**/*.json
+data/**/*.jsonl
+data/*.db
+*.sqlite3
+backend/vectorstore/**/*.faiss
+backend/vectorstore/**/*.pkl
+
+# Frontend
+node_modules/
+dist/
+.vite/
+
+# macOS
+.DS_Store
