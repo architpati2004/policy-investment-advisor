@@ -340,8 +340,35 @@ and cannot be monkeypatched.
   applicability rule is what refuses the near-miss.
 - **macOS 14 is past Homebrew's support window.** Ollama had to be installed from
   ollama.com rather than Homebrew, which wanted to compile it from source.
-- **Tables in annual reports are untested.** Phase 6 ingests a 589-page
-  company report; multi-column financial tables may need cleaning work.
+- **Table extraction loses column headers, so financial figures cannot be
+  attributed to a year. No fix yet.** Extraction flattens a table into a run of
+  numbers with the headers stripped, so a chunk retrieved from the ratios page
+  of the Godrej annual report reads `Net profit margin (%) 7.83% 20.10` — two
+  columns, FY24 and FY23, with nothing saying which is which. Neither the model
+  nor a reader checking the citation can tell, so it will confidently state the
+  wrong year's figure. **Financial questions against the company index are not
+  trustworthy until this is fixed.** Likely direction: a table-aware extractor
+  (`pdfplumber`, `camelot`) for pages detected as tabular, emitting one chunk
+  per row with its headers attached, rather than letting `pypdf` flatten them.
+- **Marketing prose outranks substantive disclosure in the company index. No
+  fix yet.** Asking "what drove revenue growth?" returns "committed to driving
+  category development through breakthrough innovation, robust brand building"
+  at rank 1 — aspirational filler that embeds well against the question and
+  says nothing — while the genuinely useful chunks (15% e-commerce growth in
+  Africa and the USA, 41% of revenue international) rank 2 and 3. Annual
+  reports are perhaps 40% this register, and nothing currently tells it apart
+  from disclosure. Nothing in the retrieval policy helps: the floors filter by
+  score, and the filler scores *well*. Possible directions, none tried: skip
+  the front-of-book sections at ingest, weight chunks containing figures, or
+  rerank retrieved chunks before they reach the model.
+- **Company chunks score lower than policy chunks.** 0.38-0.47 against
+  0.47-0.68, so the 0.35 absolute floor sits close to genuine matches and the
+  relative ratio is doing nearly all the filtering. Worth rechecking when more
+  companies are indexed.
+- **pypdf warns about CFF Type1 font encoding** on the Godrej report
+  (`fontTools is required to fully parse...`). Text extracted correctly, so
+  `fonttools` is not installed; if mangled characters appear later, that is the
+  first thing to add.
 
 ## 12. What Phase 4 must deliver
 
