@@ -1,8 +1,7 @@
 """FastAPI application entrypoint.
 
-Phase 2 exposes system endpoints only: health, configuration and local inference
-status. Feature routers (portfolio, chat, documents, alerts) are mounted here in
-Phase 11.
+Mounts the system router from Phase 2 and the feature routers from Phase 11:
+portfolio, chat, documents and alerts.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.api import system
+from backend.api import alerts, chat, documents, portfolio, system
 from backend.config import get_settings
 from backend.exceptions import AdvisorError
 from backend.logging_config import configure_logging, get_logger
@@ -32,6 +31,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
     settings.ensure_directories()
+
+    from backend.db.session import init_db
+
+    # Idempotent, and cheap: the API should serve a portfolio request on a
+    # fresh checkout without a separate setup step.
+    init_db(settings=settings)
     logger.info(
         "%s v%s ready | llm=%s | embeddings=%s | ollama=%s",
         settings.app_name,
@@ -84,6 +89,10 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
 
     app.include_router(system.router)
+    app.include_router(portfolio.router)
+    app.include_router(chat.router)
+    app.include_router(documents.router)
+    app.include_router(alerts.router)
     return app
 
 
