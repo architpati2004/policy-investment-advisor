@@ -476,6 +476,44 @@ evidence**: the fingerprint is the holding plus the chunks cited, so a circular
 seen on ten runs raises one alert; acknowledging keeps the fingerprint so it
 cannot return, and clearing deliberately forgets it.
 
+### Phase 10 on 4b: run alerts on the small model
+
+The alert prompt was verified on both models across four cases — routine noise,
+a bank circular against an FMCG holding, sector news that never names the
+company, and filing-only evidence. All four raise/don't-raise decisions were
+correct on qwen3:4b. Three findings came out of it.
+
+**1. 4b cannot write an alert summary within a workable deadline.** The prompt
+as first written generated 2,260 tokens and hit the 300 s deadline on case one.
+Compressed from 700 to 344 characters it completed — and then summarised a
+correctly-raised alert as literally `[1], [2]`: right decision, right citations,
+nothing a reader could act on. That is the whole vice in one line. **Terse enough
+for 4b to finish and the output is empty; verbose enough to write a sentence and
+it times out.** On this hardware 4b cannot do both, and no fifth revision was
+attempted, because the Phase 8 table above shows where that goes.
+
+**2. Alerts cost per holding, not per question.** 4b took 93 s, 281 s, 309 s and
+167 s on the four cases; 1.7b took 35 s, 75 s, 15 s and 12 s. A six-holding
+portfolio on 4b is ten to thirty minutes per run with truncation risk, because
+this is the one component where the cost multiplies by portfolio size.
+
+**3. So alerts run on 1.7b — with one real qualification.** This inverts the
+dev/demo split above, and it is defensible because the safety properties live in
+code rather than in the prompt: uncited alerts, filing-only alerts and
+contentless alerts are discarded whatever the model says, so a weaker model
+degrades toward silence. **But not purely toward silence.** On the bank-circular
+case, 4b correctly declined — a rule about commercial banks does not reach a
+consumer-goods holding — while **1.7b raised it**, reasoning that risk weights
+"could impact Godrej Consumer Products' credit risk exposure". That is exactly
+the second-order inference the sources do not support. So the small model is
+**more likely to manufacture an applicability link**, and that cost is paid on
+every alert run. Spot-check alerts on 4b before trusting a pattern of them.
+
+A code-level guard was added from finding 1: a summary with fewer than three
+words of prose once citation markers are stripped is discarded. The bar is
+deliberately "names something" rather than "writes at length" — at five words it
+rejected "Risk weights rise", which is terse but perfectly actionable.
+
 ### The Phase 8 prompt, and why it over-refuses
 
 Four revisions, each verified on qwen3:4b. Every instruction that made the

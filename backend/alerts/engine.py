@@ -253,6 +253,20 @@ class AlertEngine:
 
         chunks = [context.chunks[number - 1] for number in sorted(cited)]
 
+        summary = prompts.strip_alert_markers(reply)
+        if not prompts.has_substantive_prose(summary):
+            # Measured on qwen3:4b: a correct decision to raise, cited correctly,
+            # summarised as "[1], [2]". An alert a reader cannot act on is worse
+            # than silence, because it still costs them their attention.
+            logger.info("Discarding contentless alert for %s: %r", holding.ticker, summary)
+            return Finding(
+                ticker=holding.ticker,
+                summary=summary,
+                reason="the report was only citation markers, with nothing to act on",
+                considered=len(context.chunks),
+                elapsed_seconds=elapsed,
+            )
+
         if not any(chunk.origin in DEVELOPMENT_ORIGINS for chunk in chunks):
             # Everything cited came from the holding's own filings, which report
             # no development — this is where annual-report boilerplate turns
@@ -260,7 +274,7 @@ class AlertEngine:
             logger.info("Discarding filing-only alert for %s", holding.ticker)
             return Finding(
                 ticker=holding.ticker,
-                summary=prompts.strip_alert_markers(reply),
+                summary=summary,
                 reason="the only evidence was the company's own filing, which reports nothing new",
                 considered=len(context.chunks),
                 elapsed_seconds=elapsed,
@@ -289,7 +303,7 @@ class AlertEngine:
             portfolio_id=portfolio_id,
             ticker=holding.ticker,
             fingerprint=identity,
-            summary=prompts.strip_alert_markers(reply),
+            summary=summary,
             evidence=json.dumps(citations),
         )
         session.add(alert)

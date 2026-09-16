@@ -338,7 +338,7 @@ def test_alerts_list_newest_first_and_hide_acknowledged(
     session: Session, settings: Settings
 ) -> None:
     for text in ("first circular", "second circular"):
-        engine, _, _ = _engine(f"Something changed [1].", policy=[_result(0.6, text)],
+        engine, _, _ = _engine("The circular revises risk weights [1].", policy=[_result(0.6, text)],
                                settings=settings)
         _check(engine, session)
 
@@ -520,3 +520,51 @@ def test_a_filing_may_support_an_alert_a_development_anchors(
 
     assert finding.raised is True
     assert {c["origin"] for c in finding.citations} == {"news", "holding"}
+
+
+def test_an_alert_that_is_only_citation_markers_is_discarded(
+    session: Session, settings: Settings
+) -> None:
+    """The literal qwen3:4b output. It decided to raise, cited correctly, and
+    summarised the development as "[1], [2]" — nothing a reader could act on."""
+    engine, _, _ = _engine(
+        "[1], [2]",
+        policy=[_result(0.6, "Risk weights rise to 125 per cent.")],
+        news=[_result(0.55, "Palm oil prices climb.", document_type="news")],
+        settings=settings,
+    )
+
+    finding = _check(engine, session)
+
+    assert finding.raised is False
+    assert "only citation markers" in (finding.reason or "")
+    assert session.query(Alert).count() == 0
+
+
+def test_a_summary_with_real_prose_is_kept(session: Session, settings: Settings) -> None:
+    engine, _, _ = _engine(
+        "Palm oil prices climbed 18% this quarter, squeezing consumer goods margins [1].",
+        news=[_result(0.55, "Palm oil prices climb.", document_type="news")],
+        settings=settings,
+    )
+
+    finding = _check(engine, session)
+
+    assert finding.raised is True
+    assert "Palm oil" in (finding.summary or "")
+
+
+@pytest.mark.parametrize(
+    ("summary", "substantive"),
+    [
+        ("[1], [2]", False),
+        ("[1] [2] [3]", False),
+        ("   ", False),
+        ("See [1].", False),
+        ("Risk weights rise [1].", True),  # terse but actionable: not the target
+        ("Palm oil costs are rising sharply [1].", True),
+        ("The circular raises risk weights on unsecured retail credit [2].", True),
+    ],
+)
+def test_substantive_prose_detection(summary: str, substantive: bool) -> None:
+    assert prompts.has_substantive_prose(summary) is substantive

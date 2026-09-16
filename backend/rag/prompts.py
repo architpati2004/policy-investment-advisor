@@ -43,6 +43,7 @@ out, so 1300-1900 characters of chain-of-thought land in the answer itself.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from backend.rag.vector_store import SearchResult
@@ -238,18 +239,20 @@ def build_portfolio_messages(
 #: Exact token the model emits when nothing in the sources is material.
 NO_ALERT = "NO_ALERT"
 
+#: Deliberately terse. An earlier draft spelled out what does not count as a
+#: development — routine movement, another company, general commentary — and
+#: qwen3:4b spent 2,260 tokens weighing those clauses before timing out at 300s.
+#: Prompt wording drives token count here far more than context does (see the
+#: Phase 8 table in CLAUDE.md section 11), so the judgement is stated once and
+#: the disqualifying cases are left to the word "materially" and to the code,
+#: which discards uncited and filing-only alerts regardless of what is said here.
 ALERT_SYSTEM_PROMPT = f"""\
-You judge whether the numbered sources contain a development that materially \
-affects one holding.
-Cite every claim as [1], [2]. An uncited judgement is discarded, so cite the \
-source the development comes from.
-Sources bind only the institutions, instruments and companies they name. Routine \
-market movement, a source about a different company, and general commentary are \
-not developments. A HOLDING source is the company's own filing: use it to explain \
-why something matters, never as the development itself.
-If nothing in the sources is material to this holding, reply exactly: {NO_ALERT}
-Reply with one or two sentences naming the development and why it bears on the \
-holding. No preamble, no reasoning.
+Report a development in the numbered sources that materially affects this holding.
+Cite it as [1], [2]; an uncited report is discarded.
+A HOLDING source is the company's own filing — evidence for why a development \
+matters, never the development itself.
+If there is none, reply exactly: {NO_ALERT}
+One or two sentences. No preamble, no reasoning.
 """
 
 ALERT_TEMPLATE = """\
@@ -284,6 +287,34 @@ def is_no_alert(reply: str) -> bool:
     depends on the ordering eventually reads "nothing to report" as a warning.
     """
     return any(line.strip().upper().startswith(NO_ALERT) for line in reply.splitlines())
+
+
+#: An alert summary needs at least this many words of prose once citation
+#: markers are removed. qwen3:4b, asked tersely enough to finish inside the
+#: deadline, answered one case with literally "[1], [2]" — correct citations,
+#: correct decision to raise, and nothing a reader could act on.
+#:
+#: Deliberately low. The bar is "names something", not "writes at length": at
+#: five this rejected "Risk weights rise", which is terse but perfectly
+#: actionable, and a guard that polices style rather than emptiness would throw
+#: away real alerts.
+MIN_SUMMARY_WORDS = 3
+
+_CITATION_MARKER = re.compile(r"\[\d{1,2}\]")
+_WORD = re.compile(r"[A-Za-z]{2,}")
+
+
+def has_substantive_prose(summary: str) -> bool:
+    """True when a summary says something beyond pointing at sources.
+
+    Strips citation markers and counts real words. The failure this exists for
+    is not hypothetical: a model told to be terse will discover that citation
+    markers alone technically satisfy "cite every claim", and an alert reading
+    ``[1], [2]`` is worse than no alert, because it occupies a reader's
+    attention while telling them nothing.
+    """
+    without_markers = _CITATION_MARKER.sub(" ", summary or "")
+    return len(_WORD.findall(without_markers)) >= MIN_SUMMARY_WORDS
 
 
 def strip_alert_markers(reply: str) -> str:
