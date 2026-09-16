@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.conftest import FakeEmbeddings
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
@@ -36,26 +38,6 @@ from backend.rag.retrieval import CompanyRetriever, RetrievalPolicy, scope_filte
 from backend.rag.vector_store import VectorIndex, company_index
 
 WORD = re.compile(r"[a-z0-9]+")
-
-
-class FakeEmbeddings(Embeddings):
-    """Deterministic bag-of-words embeddings, unit length, no network."""
-
-    dimension = 64
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [self._vector(text) for text in texts]
-
-    def embed_query(self, text: str) -> list[float]:
-        return self._vector(text)
-
-    def _vector(self, text: str) -> list[float]:
-        vector = [0.0] * self.dimension
-        for word in WORD.findall(text.lower()):
-            bucket = int(hashlib.sha256(word.encode("utf-8")).hexdigest(), 16) % self.dimension
-            vector[bucket] += 1.0
-        norm = math.sqrt(sum(value * value for value in vector))
-        return vector if norm == 0 else [value / norm for value in vector]
 
 
 GODREJ = Company("GODREJCP", "Godrej Consumer Products", "FMCG", ("godrej consumer", "gcpl"))

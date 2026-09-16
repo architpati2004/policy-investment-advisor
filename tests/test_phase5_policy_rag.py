@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.conftest import Chunk, StubChatModel
 from langchain_core.documents import Document
 
 from backend.config import Settings, get_settings
@@ -44,31 +46,6 @@ def _result(score: float, text: str = "Some regulatory text.", **metadata: Any) 
         **metadata,
     }
     return SearchResult(document=Document(page_content=text, metadata=meta), score=score)
-
-
-class _Chunk:
-    """One streamed chunk, as ``ChatOllama.stream`` yields them."""
-
-    def __init__(self, content: str) -> None:
-        self.content = content
-
-
-class StubChatModel:
-    """Returns a scripted reply and records what it was asked.
-
-    Streams, because that is how the chain consumes a model: generation is read
-    chunk by chunk so a wall-clock deadline can be enforced between chunks.
-    """
-
-    def __init__(self, reply: str) -> None:
-        self.reply = reply
-        self.calls: list[list[tuple[str, str]]] = []
-
-    def stream(self, messages: list[tuple[str, str]]) -> Any:
-        self.calls.append(messages)
-        # Split into two chunks so any accumulation bug shows up here.
-        half = len(self.reply) // 2
-        return iter([_Chunk(self.reply[:half]), _Chunk(self.reply[half:])])
 
 
 class StubRetriever:
@@ -480,7 +457,7 @@ class SlowStreamModel:
         class _Stream:
             def __iter__(self) -> Any:
                 for index in range(model.chunks):
-                    yield _Chunk(f"token{index} ")
+                    yield Chunk(f"token{index} ")
 
             def close(self) -> None:
                 model.closed = True

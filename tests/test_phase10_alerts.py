@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.conftest import Chunk, StubChatModel
 from langchain_core.documents import Document
 from sqlalchemy.orm import Session
 
@@ -51,21 +53,6 @@ def _retrieval(results: list[SearchResult], reason: str | None = None) -> Retrie
         floor=0.35,
         reason=reason,
     )
-
-
-class _Chunk:
-    def __init__(self, content: str) -> None:
-        self.content = content
-
-
-class StubChatModel:
-    def __init__(self, reply: str) -> None:
-        self.reply = reply
-        self.calls: list[list[tuple[str, str]]] = []
-
-    def stream(self, messages: list[tuple[str, str]]) -> Any:
-        self.calls.append(messages)
-        return iter([_Chunk(self.reply)])
 
 
 class StubRetriever:

@@ -1,11 +1,14 @@
-.PHONY: help setup env models run test verify verify-ollama index index-stats clean frontend-setup
+.PHONY: help setup env models run test test-slow coverage frontend-test verify verify-ollama index index-stats clean
 
 help:
 	@echo "setup          Create .venv and install backend dependencies"
 	@echo "env            Copy .env.example to .env (if missing)"
 	@echo "models         Pull the required Ollama models"
 	@echo "run            Start the FastAPI dev server"
-	@echo "test           Run the test suite"
+	@echo "test           Run the fast test suite"
+	@echo "test-slow      Run the live-generation tests (minutes)"
+	@echo "coverage       Run the suite with a coverage report"
+	@echo "frontend-test  Run the frontend test suite"
 	@echo "verify         Run the Phase 1 setup checker"
 	@echo "verify-ollama  Check the local Ollama connection"
 	@echo "index          Build the policy FAISS index from data/policies/"
@@ -30,6 +33,15 @@ run:
 
 test:
 	./.venv/bin/pytest
+
+test-slow:
+	./.venv/bin/pytest -m slow
+
+coverage:
+	./.venv/bin/pytest --cov=backend --cov-report=term-missing:skip-covered
+
+frontend-test:
+	cd frontend && npm test
 
 verify:
 	./.venv/bin/python scripts/check_setup.py
