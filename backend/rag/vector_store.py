@@ -482,3 +482,21 @@ def company_index(
         name="company",
         settings=settings,
     )
+
+
+def news_index(
+    embeddings: Embeddings | None = None,
+    settings: Settings | None = None,
+) -> VectorIndex:
+    """The news index, populated from RSS feeds (Phase 9).
+
+    Separate from the company index deliberately — see
+    :attr:`backend.config.Settings.news_index_dir`.
+    """
+    settings = settings or get_settings()
+    return VectorIndex(
+        settings.news_index_dir,
+        embeddings or build_embeddings(settings),
+        name="news",
+        settings=settings,
+    )

@@ -91,14 +91,14 @@ Built in 14 phases, one at a time, each verified before the next starts.
 | 6 | Company FAISS index | done |
 | 7 | Portfolio database | done |
 | 8 | Portfolio-aware RAG | done |
-| 9 | News ingestion (RSS) | next |
-| 10 | Alert engine | pending |
+| 9 | News ingestion (RSS) | done |
+| 10 | Alert engine | next |
 | 11 | FastAPI endpoints | pending |
 | 12 | React frontend | pending |
 | 13 | Tests | pending |
 | 14 | README + demo | pending |
 
-Test suite currently: **234 passing** in the default run (about 25 s), plus 4
+Test suite currently: **270 passing** in the default run (about 17 s), plus 4
 `slow` tests that run real local generation and are excluded unless you ask for
 them with `pytest -m slow` (about 2 minutes). Live tests skip themselves when
 Ollama is not running.
@@ -385,6 +385,48 @@ and cannot be monkeypatched.
   checked by the person receiving it. Untried directions: require a citation for
   the sources examined rather than only for claims made, or have the alert
   engine fall back to the retrieved source list when `grounded` is false.
+
+### Phase 9: recency, and where news lives
+
+**Recency is a property of the document type, not of the corpus.** A circular
+that has not been amended binds exactly as much today as when it was published;
+an article is a claim about a moment that has passed. So decay keyed on age
+alone would be wrong, and decay keyed on *what kind of document this is* is
+right. Only `document_type == "news"` decays — 1.00 today, 0.63 at a month, 0.50
+at six weeks, flattening at 0.30 after about eleven weeks. Three guards keep
+"never bury an old-but-binding regulation" structural rather than aspirational,
+and each has a test:
+
+1. **`TIMELESS_TYPES`** covers policy, circular, regulation, budget,
+   annual_report, quarterly_result and fundamentals. They return 1.0
+   unconditionally, so no regulation can be demoted for being settled law.
+2. **Floors run on the raw score, re-ranking happens after.** Decay can only
+   reorder. Applied before filtering, it could push a relevant article below a
+   threshold and out of the results entirely.
+3. **Undated is not old.** Feeds omit dates constantly; treating unknown as
+   ancient would bury exactly the articles whose provenance is weakest. No date
+   means no decay, and the citation says "no date".
+
+Observed live: a query returned yesterday's article (0.461 x 0.98 = 0.454) above
+today's (0.450 x 1.00 = 0.450). Freshness nudges; relevance still leads.
+
+**News lives in its own index, not the company index.** Guaranteeing news a
+share of context requires a separate search anyway — Phase 8 measured what
+sharing a vector space does, 5-0 and 0-5 splits with one corpus shutting the
+other out — so a `document_type` discriminator inside one index is a third index
+with extra steps and a slower filtered sweep. Three supporting reasons: one
+589-page filing is 1,776 chunks against an article's one, so mass alone would
+decide every top-k; §11 already records marketing prose outranking disclosure
+there, which headline-shaped chunks would compound; and news needs pruning on a
+cadence filings do not.
+
+**The trade-off: Phase 10 needs three-way merge logic, not two-way.**
+`merge_context` currently reserves slots for two corpora. Adding news means
+deciding how three sets share `RETRIEVAL_TOP_K`, and a question spanning a
+filing and a story about it now needs both retrievers to fire rather than one.
+That cost was accepted because news crowding out disclosure inside one index is
+invisible when it happens, and this project has already been bitten by exactly
+that once.
 
 ### The Phase 8 prompt, and why it over-refuses
 

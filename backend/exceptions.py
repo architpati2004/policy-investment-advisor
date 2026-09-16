@@ -289,3 +289,16 @@ class UnknownTickerError(PortfolioError):
         )
         self.ticker = ticker
         self.known = known or []
+
+
+class InvalidFeedsError(DocumentError):
+    """The RSS feed list is malformed."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            f"Feed list is invalid: {detail}",
+            remediation=(
+                "Fix data/news/feeds.json — a JSON list of objects with 'name', "
+                "'url' and an optional 'sector'."
+            ),
+        )

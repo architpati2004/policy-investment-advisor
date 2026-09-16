@@ -193,3 +193,42 @@ class CompanyRegistry:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = [company.to_dict() for company in self._companies]
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    # --- Matching against free text ----------------------------------------
+
+    def mentioned_in(self, text: str) -> list[Company]:
+        """Companies a piece of prose names, most specific first.
+
+        Used for news, where the company is named in the body rather than in a
+        filename, so the folded substring matching :meth:`resolve` uses would be
+        far too loose — ``normalise`` strips spaces, and a ticker like
+        ``RELIANCE`` would then match inside "reliance on imported crude".
+
+        So prose is matched on word boundaries in the original text:
+
+        * **name and aliases**, case-insensitively — "Godrej Consumer Products"
+          and "godrej consumer" both count;
+        * **the ticker**, only in upper case — news writes ``RELIANCE`` for the
+          scrip and "reliance" for the noun, and the distinction is the only
+          signal available.
+
+        A company named after an ordinary word can still produce a false
+        positive in its own name form; that is what ``aliases`` is for, and why
+        attribution is reported per article rather than assumed.
+        """
+        if not text or not text.strip():
+            return []
+
+        matches: list[tuple[int, Company]] = []
+        for company in self._companies:
+            best = 0
+            for phrase in (company.name, *company.aliases):
+                if phrase and re.search(rf"\b{re.escape(phrase)}\b", text, flags=re.IGNORECASE):
+                    best = max(best, len(phrase))
+            if re.search(rf"\b{re.escape(company.ticker)}\b", text):
+                best = max(best, len(company.ticker))
+            if best:
+                matches.append((best, company))
+
+        matches.sort(key=lambda pair: pair[0], reverse=True)
+        return [company for _, company in matches]

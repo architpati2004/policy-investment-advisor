@@ -35,11 +35,18 @@ So relevance is filtered in two ways here, and refused in a third elsewhere:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Any, Callable, Literal, Sequence
 
 from backend.config import Settings, get_settings
 from backend.logging_config import get_logger
-from backend.rag.vector_store import SearchResult, VectorIndex, company_index, policy_index
+from backend.rag.vector_store import (
+    SearchResult,
+    VectorIndex,
+    company_index,
+    news_index,
+    policy_index,
+)
 
 logger = get_logger(__name__)
 
@@ -371,3 +378,126 @@ def merge_context(
         policy_reason=policy.reason,
         company_reason=company.reason,
     )
+
+
+# --- Recency (news only) -----------------------------------------------------
+
+#: Document types whose relevance does not decay. A circular is a standing
+#: instruction: unamended, it binds exactly as much today as when it was
+#: published, so ageing it would bury a rule for the crime of being settled law.
+TIMELESS_TYPES = frozenset({"policy", "circular", "budget", "regulation",
+                            "annual_report", "quarterly_result", "fundamentals", "other"})
+
+
+def freshness(
+    metadata: dict[str, Any],
+    *,
+    half_life_days: int,
+    floor: float,
+    today: date | None = None,
+) -> float:
+    """Rank weight for a chunk, in ``[floor, 1.0]``.
+
+    Recency is a property of the *kind* of document, not of the corpus. Only
+    ``news`` decays, because only news makes a claim about a moment; everything
+    else returns 1.0 unconditionally, which is what keeps an old-but-binding
+    regulation from being buried for being old.
+
+    Two further guarantees:
+
+    * **A floor**, so age demotes an article by at most ``1 - floor`` and never
+      erases it.
+    * **Undated is not old.** Feeds routinely omit dates, and treating unknown as
+      ancient would silently bury exactly the articles whose provenance is
+      weakest. No date means no decay.
+
+    This weight is applied to *ordering only*. Relevance floors are applied to
+    the raw score, so decay can never push a chunk below a threshold and out of
+    the results.
+    """
+    if str(metadata.get("document_type", "")) in TIMELESS_TYPES:
+        return 1.0
+
+    published = metadata.get("date")
+    if not published:
+        return 1.0
+    try:
+        published_on = date.fromisoformat(str(published))
+    except ValueError:
+        return 1.0
+
+    age_days = max((today or date.today()) - published_on, timedelta(0)).days
+    if half_life_days <= 0:
+        return 1.0
+    weight = 0.5 ** (age_days / half_life_days)
+    return max(floor, min(1.0, weight))
+
+
+class NewsRetriever:
+    """Retrieves news, ranked by relevance *and* recency.
+
+    Same relevance policy as the other retrievers — the floors belong to the
+    embedding model, not to the corpus — with ordering adjusted by
+    :func:`freshness` so that, among articles of comparable relevance, the recent
+    one leads.
+    """
+
+    def __init__(
+        self,
+        index: VectorIndex | None = None,
+        settings: Settings | None = None,
+        policy: RetrievalPolicy | None = None,
+    ) -> None:
+        self._settings = settings or get_settings()
+        self.index = index if index is not None else news_index(settings=self._settings)
+        self.policy = policy or RetrievalPolicy.from_settings(self._settings)
+
+    def retrieve(
+        self,
+        question: str,
+        *,
+        companies: Sequence[str] | None = None,
+        sectors: Sequence[str] | None = None,
+        k: int | None = None,
+        today: date | None = None,
+    ) -> Retrieval:
+        """Fetch, filter and re-rank news for one question.
+
+        Filtering happens on the raw score and re-ranking after it, in that
+        order. Doing it the other way round would let age remove an article
+        rather than merely demote it.
+
+        Raises:
+            IndexNotFoundError: the news index has not been built.
+        """
+        top_k = self.policy.top_k if k is None else k
+        scope = scope_filter(companies, sectors)
+        candidates = self.index.search(question, k=top_k, min_score=0.0, filter=scope)
+
+        kept, floor, reason = select_relevant(candidates, self.policy)
+
+        ranked = sorted(
+            kept,
+            key=lambda result: result.score
+            * freshness(
+                result.metadata,
+                half_life_days=self._settings.news_half_life_days,
+                floor=self._settings.news_freshness_floor,
+                today=today,
+            ),
+            reverse=True,
+        )
+
+        if reason and scope is not None:
+            reason = f"{reason} (searching only {_describe_scope(companies, sectors)})"
+        if reason:
+            logger.info("No usable news for %r: %s", question, reason)
+
+        return Retrieval(
+            question=question,
+            results=ranked,
+            considered=len(candidates),
+            best_score=candidates[0].score if candidates else None,
+            floor=floor,
+            reason=reason,
+        )

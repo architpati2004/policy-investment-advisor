@@ -77,6 +77,21 @@ class Settings(BaseSettings):
     #: match improves, the bar rises with it.
     relative_relevance_ratio: float = 0.75
 
+    # --- News recency ------------------------------------------------------
+    #: Age at which a news article's rank weight halves. Applies to news only:
+    #: a regulation is a standing instruction and does not go stale, while an
+    #: article is a claim about a moment. With the floor below, the resulting
+    #: curve is 1.00 today, 0.63 at a month, 0.50 at six weeks, 0.40 at two
+    #: months, flattening at 0.30 after about eleven weeks — so it discriminates
+    #: across roughly a quarter and then stops caring, which is about how long a
+    #: market development stays live.
+    news_half_life_days: int = 45
+    #: Floor on that weight, so age demotes an article at most this far and
+    #: never erases it. Decay reorders; it never removes.
+    news_freshness_floor: float = 0.3
+    #: Articles kept per feed per run, newest first.
+    news_max_articles_per_feed: int = 50
+
     # --- Storage locations (relative paths resolve to the project root) ----
     data_dir: str = "data"
     vectorstore_dir: str = "backend/vectorstore"
@@ -129,8 +144,19 @@ class Settings(BaseSettings):
 
     @property
     def company_index_dir(self) -> Path:
-        """FAISS index holding company, fundamentals and news chunks."""
+        """FAISS index holding company fundamentals and filings."""
         return self.vectorstore_path / "company_index"
+
+    @property
+    def news_index_dir(self) -> Path:
+        """FAISS index holding news articles.
+
+        Separate from the company index on purpose: guaranteeing news a share of
+        context requires its own search anyway, one 589-page filing outweighs
+        every article by chunk count, and news needs pruning on a cadence that
+        filings do not.
+        """
+        return self.vectorstore_path / "news_index"
 
     @property
     def resolved_database_url(self) -> str:
@@ -168,6 +194,7 @@ class Settings(BaseSettings):
             self.vectorstore_path,
             self.policy_index_dir,
             self.company_index_dir,
+            self.news_index_dir,
         ]
 
     def ensure_directories(self) -> None:
