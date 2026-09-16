@@ -197,6 +197,10 @@ def format_context(chunks: list[Any]) -> str:
         metadata = chunk.metadata
         if chunk.origin == "holding":
             label = f"HOLDING {metadata.get('company', 'unknown')}"
+        elif chunk.origin == "news":
+            # Labelled so the model can weigh a dated report differently from a
+            # standing rule; the date is already appended below.
+            label = "NEWS"
         else:
             label = "POLICY"
         header = f"[{number}] {label} — {display_title(metadata)}"
@@ -227,3 +231,66 @@ def build_portfolio_messages(
             ),
         ),
     ]
+
+
+# --- Alerts (Phase 10) -------------------------------------------------------
+
+#: Exact token the model emits when nothing in the sources is material.
+NO_ALERT = "NO_ALERT"
+
+ALERT_SYSTEM_PROMPT = f"""\
+You judge whether the numbered sources contain a development that materially \
+affects one holding.
+Cite every claim as [1], [2]. An uncited judgement is discarded, so cite the \
+source the development comes from.
+Sources bind only the institutions, instruments and companies they name. Routine \
+market movement, a source about a different company, and general commentary are \
+not developments. A HOLDING source is the company's own filing: use it to explain \
+why something matters, never as the development itself.
+If nothing in the sources is material to this holding, reply exactly: {NO_ALERT}
+Reply with one or two sentences naming the development and why it bears on the \
+holding. No preamble, no reasoning.
+"""
+
+ALERT_TEMPLATE = """\
+Holding: {holding}
+
+Sources:
+{sources}
+
+Does anything here materially affect this holding?"""
+
+
+def build_alert_messages(holding: Any, chunks: list[Any]) -> list[tuple[str, str]]:
+    """Assemble the chat messages for one holding's alert check."""
+    description = (
+        f"{holding.ticker} ({holding.name}), sector {holding.sector}, "
+        f"{holding.weight}% of portfolio cost"
+    )
+    return [
+        ("system", ALERT_SYSTEM_PROMPT),
+        (
+            "human",
+            ALERT_TEMPLATE.format(holding=description, sources=format_context(chunks)),
+        ),
+    ]
+
+
+def is_no_alert(reply: str) -> bool:
+    """True when the model found nothing material.
+
+    Checked per line, like :func:`is_refusal`: a model asked for a sentinel and a
+    sentence will sometimes order them the other way round, and a parser that
+    depends on the ordering eventually reads "nothing to report" as a warning.
+    """
+    return any(line.strip().upper().startswith(NO_ALERT) for line in reply.splitlines())
+
+
+def strip_alert_markers(reply: str) -> str:
+    """The alert text without any stray sentinel line."""
+    kept = [
+        line
+        for line in reply.splitlines()
+        if not line.strip().upper().startswith((NO_ALERT, AFFECTED_PREFIX))
+    ]
+    return "\n".join(kept).strip() or reply.strip()

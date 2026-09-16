@@ -92,13 +92,13 @@ Built in 14 phases, one at a time, each verified before the next starts.
 | 7 | Portfolio database | done |
 | 8 | Portfolio-aware RAG | done |
 | 9 | News ingestion (RSS) | done |
-| 10 | Alert engine | next |
-| 11 | FastAPI endpoints | pending |
+| 10 | Alert engine | done |
+| 11 | FastAPI endpoints | next |
 | 12 | React frontend | pending |
 | 13 | Tests | pending |
 | 14 | README + demo | pending |
 
-Test suite currently: **270 passing** in the default run (about 17 s), plus 4
+Test suite currently: **298 passing** in the default run (about 16 s), plus 4
 `slow` tests that run real local generation and are excluded unless you ask for
 them with `pytest -m slow` (about 2 minutes). Live tests skip themselves when
 Ollama is not running.
@@ -427,6 +427,54 @@ filing and a story about it now needs both retrievers to fire rather than one.
 That cost was accepted because news crowding out disclosure inside one index is
 invisible when it happens, and this project has already been bitten by exactly
 that once.
+
+### Phase 10: what may trigger an alert
+
+Company attribution on live RSS measured about **2.5%** — three articles in a
+hundred and twenty named any company in the registry, and two of six companies
+were never named at all. That number decided the engine's shape. An
+attribution-triggered engine would be silent most of the time, and its silence
+would mean "no headline named you" rather than "nothing happened" — from the
+outside, indistinguishable from working correctly. So the engine iterates
+**holdings, not documents**: each holding's identity becomes a watch query,
+retrieval runs across all three corpora, and the model judges materiality. A
+sector-level development reaches an FMCG holder even though no article names the
+company. Iterating holdings also bounds cost by portfolio size rather than corpus
+size — one holding is one local generation, where keying on documents would have
+meant one per article.
+
+**Feed-level sector tagging was rejected as a trigger.** Tagging a banking feed's
+articles as Banking would lift the firing rate enormously, and every one of those
+firings would be an assertion the sources do not support: a story about a bank
+you do not hold would alert your HDFCBANK position. That is manufacturing
+relevance, which is precisely what the Phase 8 prompt forbids the model from
+doing — it would be inconsistent to forbid it of the model and then hard-code it
+in the engine. Feed `sector` survives as **scoping metadata**: it helps retrieval
+decide what to consider, and never by itself constitutes an alert. Reading the
+`mentions` field in `scope_filter` was adopted instead, because those are
+verified registry matches so it adds recall with no false positives — but it is
+worth about one article in a hundred and twenty, a rounding error rather than a
+fix.
+
+**A filing may support an alert but can never constitute one.** The engine's
+first live alert was wrong in a way worth recording: asked what affects GODREJCP,
+retrieval returned three chunks of the annual report and qwen3:1.7b duly
+announced that the company has audit reports and ESG initiatives. That is the
+boilerplate-outranks-disclosure defect above, surfacing at the layer where it
+does the most damage — a user reading the word ALERT. The error was structural:
+**an annual report is a reference document, not a stream of developments**, and
+nothing in it is new however recently it was indexed. An alert must now cite at
+least one `policy` or `news` source. Filings are still retrieved, because they
+are the best evidence for *why* a development matters — the company's own account
+of its input costs behind a story about palm oil prices — but filing-only
+evidence is discarded with a reason the run prints.
+
+Two further rules are enforced in code rather than asked of the model.
+**Grounded or silent**: an uncited judgement raises nothing, which turns the
+no-impact-answers-cite-nothing defect into a safe failure. **Deduplicated on
+evidence**: the fingerprint is the holding plus the chunks cited, so a circular
+seen on ten runs raises one alert; acknowledging keeps the fingerprint so it
+cannot return, and clearing deliberately forgets it.
 
 ### The Phase 8 prompt, and why it over-refuses
 

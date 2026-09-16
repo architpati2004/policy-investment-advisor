@@ -23,9 +23,11 @@ reading a JSON file back at retrieval time.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from typing import Any
+import json
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 #: Money is stored in paise, quantity in thousandths of a share.
@@ -172,3 +174,62 @@ class Holding(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostic only
         return f"Holding(ticker={self.ticker!r}, quantity={self.quantity}, invested={self.invested})"
+
+
+class Alert(Base):
+    """A development the sources show bears on one holding.
+
+    Rows are written only for alerts that were **grounded** — the model named a
+    development and cited at least one supplied source. An ungrounded judgement
+    produces no row, which turns the defect recorded in CLAUDE.md section 11
+    (no-impact answers cite nothing) into a safe failure: silence rather than an
+    unverifiable warning.
+
+    ``fingerprint`` is a hash of the holding plus the evidence cited, so the same
+    circular seen on ten consecutive runs raises one alert, not ten. New evidence
+    about the same holding is a new fingerprint and a new alert, which is what
+    makes a genuinely new development visible.
+    """
+
+    __tablename__ = "alerts"
+    __table_args__ = (UniqueConstraint("portfolio_id", "fingerprint", name="uq_alert_fingerprint"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    portfolio_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: The holding this concerns. Nullable so a portfolio-wide alert is possible
+    #: later without a migration.
+    ticker: Mapped[str | None] = mapped_column(
+        ForeignKey("companies.ticker", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Citations as JSON, so an alert can be audited long after the indexes move on.
+    evidence: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    portfolio: Mapped[Portfolio] = relationship()
+
+    @property
+    def citations(self) -> list[dict[str, Any]]:
+        """The evidence, decoded. Never raises on a malformed row."""
+        try:
+            data = json.loads(self.evidence)
+        except (TypeError, ValueError):
+            return []
+        return data if isinstance(data, list) else []
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "ticker": self.ticker,
+            "summary": self.summary,
+            "citations": self.citations,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "acknowledged": self.acknowledged,
+        }
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostic only
+        return f"Alert(ticker={self.ticker!r}, summary={self.summary[:40]!r})"

@@ -4,5 +4,35 @@
     "name": "Godrej Consumer Products",
     "sector": "FMCG",
     "aliases": ["godrej consumer", "gcpl", "godrej consumer products ltd"]
+  },
+  {
+    "ticker": "HDFCBANK",
+    "name": "HDFC Bank",
+    "sector": "Banking",
+    "aliases": ["hdfc bank ltd"]
+  },
+  {
+    "ticker": "ICICIBANK",
+    "name": "ICICI Bank",
+    "sector": "Banking",
+    "aliases": ["icici bank ltd"]
+  },
+  {
+    "ticker": "RELIANCE",
+    "name": "Reliance Industries",
+    "sector": "Energy",
+    "aliases": ["RIL", "reliance industries ltd"]
+  },
+  {
+    "ticker": "TCS",
+    "name": "Tata Consultancy Services",
+    "sector": "IT",
+    "aliases": ["tata consultancy"]
+  },
+  {
+    "ticker": "INFY",
+    "name": "Infosys",
+    "sector": "IT",
+    "aliases": ["infosys ltd"]
   }
 ]

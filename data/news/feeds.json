@@ -6,5 +6,13 @@
   {
     "name": "Business Standard Markets",
     "url": "https://www.business-standard.com/rss/markets-106.rss"
+  },
+  {
+    "name": "Economic Times Markets",
+    "url": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"
+  },
+  {
+    "name": "Business Standard Companies",
+    "url": "https://www.business-standard.com/rss/companies-101.rss"
   }
 ]

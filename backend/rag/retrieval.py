@@ -162,8 +162,18 @@ def scope_filter(
     def matches(metadata: dict[str, Any]) -> bool:
         company = str(metadata.get("company") or "").strip().casefold()
         sector = str(metadata.get("sector") or "").strip().casefold()
-        return (bool(company) and company in wanted_companies) or (
-            bool(sector) and sector in wanted_sectors
+        if bool(company) and company in wanted_companies:
+            return True
+        if bool(sector) and sector in wanted_sectors:
+            return True
+        # A news article naming several holdings is attributed to one of them
+        # and records the rest here. Free recall: these are registry matches
+        # already, so reading them adds no false positives.
+        mentions = str(metadata.get("mentions") or "")
+        return any(
+            ticker.strip().casefold() in wanted_companies
+            for ticker in mentions.split(",")
+            if ticker.strip()
         )
 
     return matches
@@ -285,7 +295,7 @@ def _describe_scope(
 
 #: Where a chunk came from. Not cosmetic: an impact assessment has to connect a
 #: rule to a holding, so the model must be able to tell which is which.
-Origin = Literal["policy", "holding"]
+Origin = Literal["policy", "holding", "news"]
 
 
 @dataclass(frozen=True)
@@ -311,6 +321,7 @@ class MergedContext:
     chunks: list[ContextChunk] = field(default_factory=list)
     policy_reason: str | None = None
     company_reason: str | None = None
+    news_reason: str | None = None
 
     @property
     def has_context(self) -> bool:
@@ -322,62 +333,90 @@ class MergedContext:
     @property
     def reasons(self) -> list[str]:
         """Why a side contributed nothing, for explaining a thin answer."""
-        return [reason for reason in (self.policy_reason, self.company_reason) if reason]
+        return [
+            reason
+            for reason in (self.policy_reason, self.company_reason, self.news_reason)
+            if reason
+        ]
+
+
+def merge_many(sections: Sequence[tuple[Origin, Retrieval]], limit: int) -> MergedContext:
+    """Combine any number of corpora, guaranteeing each a share of the context.
+
+    Generalises the two-corpus merge to the three Phase 10 needs. The reasoning
+    is unchanged and still measured: the corpora do not share a score scale, so
+    sorting their union by score lets one shut the others out — 5-0 and 0-5
+    splits on real questions. Each section is reserved ``limit // n`` slots,
+    whatever a section does not use is offered to the others in order, and the
+    result is ordered by section so the model reads a rule, then a filing, then
+    a story.
+    """
+    reasons: dict[Origin, str | None] = {origin: retrieval.reason for origin, retrieval in sections}
+    if limit < 1 or not sections:
+        return MergedContext(
+            policy_reason=reasons.get("policy"),
+            company_reason=reasons.get("holding"),
+            news_reason=reasons.get("news"),
+        )
+
+    reserved = max(1, limit // len(sections))
+    taken: list[list[SearchResult]] = [
+        list(retrieval.results[:reserved]) for _, retrieval in sections
+    ]
+
+    # Hand out whatever the reservations left unused, in section order.
+    spare = limit - sum(len(group) for group in taken)
+    while spare > 0:
+        progressed = False
+        for index, (_, retrieval) in enumerate(sections):
+            if spare <= 0:
+                break
+            available = retrieval.results[len(taken[index]) :]
+            if available:
+                taken[index].append(available[0])
+                spare -= 1
+                progressed = True
+        if not progressed:
+            break
+
+    chunks: list[ContextChunk] = []
+    for (origin, _), group in zip(sections, taken):
+        chunks.extend(ContextChunk(result, origin) for result in group)
+
+    logger.info(
+        "Merged context: %s (limit %d)",
+        ", ".join(f"{origin} {len(group)}" for (origin, _), group in zip(sections, taken)),
+        limit,
+    )
+    return MergedContext(
+        chunks=chunks,
+        policy_reason=reasons.get("policy"),
+        company_reason=reasons.get("holding"),
+        news_reason=reasons.get("news"),
+    )
 
 
 def merge_context(
     policy: Retrieval,
     company: Retrieval,
     limit: int,
+    news: Retrieval | None = None,
 ) -> MergedContext:
-    """Combine policy and company chunks, guaranteeing each corpus a share.
+    """Combine policy, company and (optionally) news chunks under a quota.
 
-    Merging by raw score does not work here, and the reason is measured rather
-    than theoretical: the two corpora do not share a score scale. Asking "how do
-    the new RBI deposit rate rules affect my holdings?" scores policy chunks at
-    0.49-0.51 and company chunks at 0.40-0.43; asking "what regulatory changes
-    affect consumer goods companies?" reverses it, 0.33-0.35 against 0.42-0.47.
-    Sorting the union by score gave a 5-0 split one way on the first question
-    and 0-5 the other way on the second — one corpus shut the other out every
-    time.
-
-    An impact assessment needs both halves in front of the model at once: the
-    rule that changed, and the holding it might bear on. So each side is
-    guaranteed roughly half the slots, and whatever one side does not use is
-    handed to the other, which keeps a portfolio-only or policy-only question
-    from wasting context on an empty reservation. An odd remaining slot goes to
-    policy, since the regulation is what the question is usually *about* and the
-    holding is what it is measured against.
+    Kept as the two-corpus entry point Phase 8 calls; :func:`merge_many` does
+    the work. Merging by raw score does not work here, and the reason is
+    measured rather than theoretical: the corpora do not share a score scale.
+    Asking "how do the new RBI deposit rate rules affect my holdings?" scores
+    policy chunks at 0.49-0.51 and company chunks at 0.40-0.43; asking "what
+    regulatory changes affect consumer goods companies?" reverses it. Sorting
+    the union by score gave a 5-0 split one way and 0-5 the other — one corpus
+    shut the other out every time.
     """
-    if limit < 1:
-        return MergedContext(policy_reason=policy.reason, company_reason=company.reason)
-
-    reserved = max(1, limit // 2)
-    policy_taken = policy.results[:reserved]
-    company_taken = company.results[:reserved]
-
-    # Hand the unused half of one reservation to the other side.
-    spare = limit - len(policy_taken) - len(company_taken)
-    if spare > 0:
-        policy_taken += policy.results[len(policy_taken) : len(policy_taken) + spare]
-        spare = limit - len(policy_taken) - len(company_taken)
-    if spare > 0:
-        company_taken += company.results[len(company_taken) : len(company_taken) + spare]
-
-    chunks = [ContextChunk(result, "policy") for result in policy_taken]
-    chunks += [ContextChunk(result, "holding") for result in company_taken]
-
-    logger.info(
-        "Merged context: %d policy, %d company chunks (limit %d)",
-        len(policy_taken),
-        len(company_taken),
-        limit,
-    )
-    return MergedContext(
-        chunks=chunks,
-        policy_reason=policy.reason,
-        company_reason=company.reason,
-    )
+    sections: list[tuple[Origin, Retrieval]] = [("policy", policy), ("holding", company)]
+    if news is not None:
+        sections.append(("news", news))
+    return merge_many(sections, limit)
 
 
 # --- Recency (news only) -----------------------------------------------------
