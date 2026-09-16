@@ -198,7 +198,9 @@ class PolicyRAG:
             logger.info("Model declined to answer: %s", detail)
             return PolicyAnswer(
                 question=question,
-                answer=reply,
+                # Prose only. `covered` carries the refusal, `reason` the detail,
+                # so the sentinel itself has nothing left to say to a reader.
+                answer=prompts.strip_sentinels(reply) or detail,
                 covered=False,
                 sources=_sources(retrieval.results, set()),
                 reason=detail,
@@ -215,7 +217,7 @@ class PolicyRAG:
 
         return PolicyAnswer(
             question=question,
-            answer=reply,
+            answer=prompts.strip_sentinels(reply) or reply,
             covered=True,
             sources=_sources(retrieval.results, cited),
             invalid_citations=invalid,
@@ -229,7 +231,7 @@ class PolicyRAG:
         reason = retrieval.reason or "no relevant policy documents were retrieved"
         return PolicyAnswer(
             question=question,
-            answer=f"{prompts.NOT_COVERED}: {reason}",
+            answer=reason,
             covered=False,
             reason=reason,
             retrieved=0,

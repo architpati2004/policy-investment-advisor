@@ -265,7 +265,10 @@ def test_refusal_before_the_model_runs_when_nothing_clears_the_floor() -> None:
     assert model.calls == []
     assert answer.covered is False
     assert answer.generated is False
-    assert answer.answer.startswith(NOT_COVERED)
+    # `covered` carries the refusal; the text a reader sees is prose, not a
+    # machine token they have to know how to read.
+    assert NOT_COVERED not in answer.answer
+    assert "0.28" in answer.answer
     assert "0.28" in (answer.reason or "")
 
 
@@ -532,3 +535,42 @@ def test_a_stalled_stream_is_reported_as_a_timeout() -> None:
 
     with pytest.raises(LLMTimeoutError):
         ollama_client.invoke_messages(StalledModel(), [("human", "hi")], get_settings())
+
+
+# --- Sentinels stay out of the text a reader sees ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        ("NOT_COVERED: the sources govern banks", ""),
+        ("AFFECTED: none", ""),
+        ("NO_ALERT", ""),
+        ("Banks may not pay interest [1].\nAFFECTED: none", "Banks may not pay interest [1]."),
+        ("AFFECTED: GODREJCP\nInput costs rose [2].", "Input costs rose [2]."),
+        ("Plain prose with no markers.", "Plain prose with no markers."),
+    ],
+)
+def test_strip_sentinels(reply: str, expected: str) -> None:
+    assert prompts.strip_sentinels(reply) == expected
+
+
+def test_a_model_refusal_reaches_the_caller_as_prose() -> None:
+    """The sentinel is how `covered` is decided; it is not something to display."""
+    rag, _ = _rag(f"{NOT_COVERED}: the sources govern banks, not NBFCs", [_result(0.54)])
+
+    answer = rag.ask("what deposit rates can an NBFC offer?")
+
+    assert answer.covered is False
+    assert NOT_COVERED not in answer.answer
+    assert answer.answer == "the sources govern banks, not NBFCs"
+    assert answer.reason == "the sources govern banks, not NBFCs"
+
+
+def test_an_answer_keeps_its_prose_when_the_model_adds_a_sentinel_line() -> None:
+    rag, _ = _rag(f"No interest is payable [1].\n{NOT_COVERED}: partially", [_result(0.58)])
+
+    answer = rag.ask("can a bank pay interest?")
+
+    assert NOT_COVERED not in answer.answer
+    assert "No interest is payable [1]." in answer.answer

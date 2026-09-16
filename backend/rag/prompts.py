@@ -317,11 +317,31 @@ def has_substantive_prose(summary: str) -> bool:
     return len(_WORD.findall(without_markers)) >= MIN_SUMMARY_WORDS
 
 
-def strip_alert_markers(reply: str) -> str:
-    """The alert text without any stray sentinel line."""
+#: Line prefixes that are machinery, not prose. Each is parsed into a structured
+#: field — ``covered``, ``affected``, ``impact_declared`` — so leaving it in the
+#: text shows a reader the levers instead of the answer.
+SENTINEL_PREFIXES = (NOT_COVERED, AFFECTED_PREFIX, NO_ALERT)
+
+
+def strip_sentinels(reply: str) -> str:
+    """The prose a reader should see, without the markers meant for the parser.
+
+    Stripped *after* parsing, never before: the sentinels are how ``covered``,
+    ``affected`` and ``impact_declared`` are determined, so removing them earlier
+    would discard the meaning rather than relocate it.
+
+    Line-scoped, matching how the parsers read them. Returns an empty string when
+    a reply is nothing but markers, which lets callers substitute something a
+    reader can use.
+    """
     kept = [
         line
         for line in reply.splitlines()
-        if not line.strip().upper().startswith((NO_ALERT, AFFECTED_PREFIX))
+        if not line.strip().upper().startswith(SENTINEL_PREFIXES)
     ]
-    return "\n".join(kept).strip() or reply.strip()
+    return "\n".join(kept).strip()
+
+
+def strip_alert_markers(reply: str) -> str:
+    """Alert summary without its sentinels, falling back to the raw reply."""
+    return strip_sentinels(reply) or reply.strip()

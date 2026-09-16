@@ -23,7 +23,6 @@ from backend.db import portfolio as portfolio_service  # noqa: E402
 from backend.db.session import session_scope  # noqa: E402
 from backend.exceptions import AdvisorError  # noqa: E402
 from backend.logging_config import configure_logging  # noqa: E402
-from backend.rag import prompts  # noqa: E402
 from backend.rag.portfolio_rag import PortfolioAssessment, build_portfolio_rag  # noqa: E402
 
 PASS, FAIL, INFO, WARN = "[ OK ]", "[FAIL]", "[INFO]", "[WARN]"
@@ -37,14 +36,8 @@ def _report(status: str, message: str) -> None:
 def _print(assessment: PortfolioAssessment, show_context: bool) -> None:
     sys.stdout.write("\n" + "=" * 74 + "\n")
     if assessment.covered:
-        # The declared AFFECTED line is reported below in its own right; showing
-        # it inside the prose as well just reads as noise.
-        prose = "\n".join(
-            line
-            for line in assessment.answer.splitlines()
-            if not line.strip().upper().startswith(prompts.AFFECTED_PREFIX)
-        ).strip()
-        sys.stdout.write((prose or assessment.answer.strip()) + "\n")
+        # Already prose: the chain strips its own sentinels after parsing them.
+        sys.stdout.write(assessment.answer.strip() + "\n")
     else:
         sys.stdout.write(f"NOT COVERED BY THE INDEXED SOURCES\n  {assessment.reason}\n")
     sys.stdout.write("=" * 74 + "\n\n")

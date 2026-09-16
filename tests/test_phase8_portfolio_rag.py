@@ -504,3 +504,62 @@ def test_a_refusal_out_of_order_still_refuses_in_the_chain(
     assert assessment.covered is False, "a refusal must never be read as an assessment"
     assert assessment.affected == []
     assert assessment.reason == "nothing here bears on the holding"
+
+
+# --- Sentinels stay out of the text a reader sees ----------------------------
+
+
+def test_the_affected_line_does_not_leak_into_the_answer(
+    session: Session, settings: Settings
+) -> None:
+    """The leak this test exists for.
+
+    The chat page rendered "AFFECTED: none" as the first line of the answer and
+    then showed the parsed impact below it, so the machinery was visible twice —
+    once as raw text a reader has to know how to ignore.
+    """
+    rag, _, _, _ = _rag(
+        "The rules govern commercial banks, so the holding is unaffected [1].\nAFFECTED: none",
+        [_policy_result(0.5)],
+        [_company_result(0.4)],
+        settings,
+    )
+
+    assessment = rag.assess("does the deposit circular affect me?", session)
+
+    assert "AFFECTED" not in assessment.answer
+    assert assessment.answer.startswith("The rules govern commercial banks")
+    # Parsed, not discarded: the meaning moved into the structured fields.
+    assert assessment.affected == []
+    assert assessment.impact_declared is True
+
+
+def test_a_declared_impact_is_parsed_before_the_line_is_stripped(
+    session: Session, settings: Settings
+) -> None:
+    service.add_holding(session, "HDFCBANK", "40", "1650.00")
+    rag, _, _, _ = _rag(
+        "Risk weights rise for lenders [1].\nAFFECTED: HDFCBANK",
+        [_policy_result(0.5)],
+        [_company_result(0.4)],
+        settings,
+    )
+
+    assessment = rag.assess("does this affect me?", session)
+
+    assert assessment.affected == ["HDFCBANK"]
+    assert "AFFECTED" not in assessment.answer
+
+
+def test_a_portfolio_refusal_is_prose_too(session: Session, settings: Settings) -> None:
+    rag, _, _, _ = _rag(
+        f"{NOT_COVERED}: the sources say nothing about consumer goods taxation",
+        [_policy_result(0.5)],
+        [_company_result(0.4)],
+        settings,
+    )
+
+    assessment = rag.assess("how will GST changes hit my portfolio?", session)
+
+    assert NOT_COVERED not in assessment.answer
+    assert assessment.answer == "the sources say nothing about consumer goods taxation"

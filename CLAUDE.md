@@ -94,11 +94,11 @@ Built in 14 phases, one at a time, each verified before the next starts.
 | 9 | News ingestion (RSS) | done |
 | 10 | Alert engine | done |
 | 11 | FastAPI endpoints | done |
-| 12 | React frontend | next |
-| 13 | Tests | pending |
+| 12 | React frontend | done |
+| 13 | Tests | next |
 | 14 | README + demo | pending |
 
-Test suite currently: **334 passing** in the default run (about 22 s), plus 4
+Test suite currently: **345 passing** in the default run (about 25 s), plus 4
 `slow` tests that run real local generation and are excluded unless you ask for
 them with `pytest -m slow` (about 2 minutes). Live tests skip themselves when
 Ollama is not running.

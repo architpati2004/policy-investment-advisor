@@ -254,7 +254,7 @@ class PortfolioRAG:
             return PortfolioAssessment(
                 question=question,
                 portfolio=portfolio_name,
-                answer=reply,
+                answer=prompts.strip_sentinels(reply) or detail,
                 covered=False,
                 holdings=tickers,
                 sources=_sources(context.chunks, set()),
@@ -274,7 +274,9 @@ class PortfolioRAG:
         return PortfolioAssessment(
             question=question,
             portfolio=portfolio_name,
-            answer=reply,
+            # The AFFECTED line is parsed into `affected` and `impact_declared`
+            # above; showing it as well leaks the machinery into the answer.
+            answer=prompts.strip_sentinels(reply) or reply,
             covered=True,
             holdings=tickers,
             affected=affected,
@@ -299,7 +301,7 @@ class PortfolioRAG:
         return PortfolioAssessment(
             question=question,
             portfolio=portfolio_name,
-            answer=f"{prompts.NOT_COVERED}: {reason}",
+            answer=reason,
             covered=False,
             holdings=tickers,
             reason=reason,
