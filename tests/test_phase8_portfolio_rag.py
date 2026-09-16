@@ -563,3 +563,45 @@ def test_a_portfolio_refusal_is_prose_too(session: Session, settings: Settings) 
 
     assert NOT_COVERED not in assessment.answer
     assert assessment.answer == "the sources say nothing about consumer goods taxation"
+
+
+def test_an_inline_affected_declaration_is_parsed_and_then_stripped(
+    session: Session, settings: Settings
+) -> None:
+    """The leak, in the form that actually reaches the page.
+
+    qwen3 appends the declaration to a sentence as often as it puts it on its own
+    line. Parsing only the anchored form would miss it, and stripping only the
+    anchored form would show it to the reader — the first version of this fix did
+    the second.
+    """
+    service.add_holding(session, "HDFCBANK", "40", "1650.00")
+    rag, _, _, _ = _rag(
+        "Risk weights rise for lenders [1]. AFFECTED: HDFCBANK",
+        [_policy_result(0.5)],
+        [_company_result(0.4)],
+        settings,
+    )
+
+    assessment = rag.assess("does this affect me?", session)
+
+    assert "AFFECTED" not in assessment.answer
+    assert assessment.answer == "Risk weights rise for lenders [1]."
+    assert assessment.affected == ["HDFCBANK"]
+    assert assessment.impact_declared is True
+
+
+def test_an_inline_refusal_keeps_its_reason_clean(session: Session, settings: Settings) -> None:
+    rag, _, _, _ = _rag(
+        "NOT_COVERED: The sources do not specify the impact on Godrej. AFFECTED: none",
+        [_policy_result(0.5)],
+        [_company_result(0.4)],
+        settings,
+    )
+
+    assessment = rag.assess("does this affect me?", session)
+
+    assert assessment.covered is False
+    assert "AFFECTED" not in (assessment.reason or "")
+    assert "AFFECTED" not in assessment.answer
+    assert assessment.reason == "The sources do not specify the impact on Godrej."

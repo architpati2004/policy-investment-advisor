@@ -113,10 +113,14 @@ class PortfolioAssessment:
         }
 
 
-#: The model's closing ``AFFECTED: ...`` line.
+#: The model's ``AFFECTED: ...`` declaration and its payload to end of line.
+#:
+#: Not anchored to the start of a line: qwen3 appends it to a prose sentence as
+#: often as it puts it on its own line, and a parser that only reads the anchored
+#: form would miss a declaration the stripper then deletes — losing it twice.
 _AFFECTED_LINE = re.compile(
-    rf"^\s*{re.escape(prompts.AFFECTED_PREFIX)}\s*(?P<tickers>.*)$",
-    re.IGNORECASE | re.MULTILINE,
+    rf"{re.escape(prompts.AFFECTED_PREFIX)}\s*(?P<tickers>[^\n]*)",
+    re.IGNORECASE,
 )
 
 

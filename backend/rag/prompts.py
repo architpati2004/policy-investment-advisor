@@ -115,7 +115,7 @@ def build_messages(question: str, results: list[SearchResult]) -> list[tuple[str
 def _refusal_line(answer: str) -> str | None:
     """The line carrying the refusal sentinel, wherever the model put it."""
     for line in answer.splitlines():
-        if line.strip().upper().startswith(NOT_COVERED):
+        if NOT_COVERED in line.upper():
             return line
     return None
 
@@ -139,7 +139,10 @@ def refusal_detail(answer: str) -> str:
     if line is None:
         return "the retrieved sources do not cover this question"
     _, _, detail = line.partition(":")
-    return detail.strip() or "the retrieved sources do not cover this question"
+    # The detail may itself trail another sentinel — "…impact on Godrej.
+    # AFFECTED: none" — and this string is shown to the reader as the finding.
+    detail = _SENTINEL_TAIL.sub("", detail).strip()
+    return detail or "the retrieved sources do not cover this question"
 
 
 # --- Portfolio impact (Phase 8) ----------------------------------------------
@@ -286,7 +289,7 @@ def is_no_alert(reply: str) -> bool:
     sentence will sometimes order them the other way round, and a parser that
     depends on the ordering eventually reads "nothing to report" as a warning.
     """
-    return any(line.strip().upper().startswith(NO_ALERT) for line in reply.splitlines())
+    return any(NO_ALERT in line.upper() for line in reply.splitlines())
 
 
 #: An alert summary needs at least this many words of prose once citation
@@ -317,10 +320,26 @@ def has_substantive_prose(summary: str) -> bool:
     return len(_WORD.findall(without_markers)) >= MIN_SUMMARY_WORDS
 
 
-#: Line prefixes that are machinery, not prose. Each is parsed into a structured
-#: field — ``covered``, ``affected``, ``impact_declared`` — so leaving it in the
-#: text shows a reader the levers instead of the answer.
+#: Markers that are machinery, not prose. Each is parsed into a structured field
+#: — ``covered``, ``affected``, ``impact_declared`` — so leaving one in the text
+#: shows a reader the levers instead of the answer.
 SENTINEL_PREFIXES = (NOT_COVERED, AFFECTED_PREFIX, NO_ALERT)
+
+#: A sentinel and whatever follows it on that line.
+#:
+#: Matched *anywhere* in a line rather than only at its start, because that is
+#: how the models actually write them. qwen3:4b produced "NOT_COVERED: the
+#: sources do not specify the impact on Godrej. AFFECTED: none" — one line, two
+#: sentinels, the second of them trailing prose. A start-of-line rule walks past
+#: that and the marker reaches the reader.
+#:
+#: ``AFFECTED`` requires its colon so the ordinary word in prose ("the affected
+#: holdings") cannot swallow the rest of a sentence; ``NOT_COVERED`` and
+#: ``NO_ALERT`` are invented tokens and need no such guard.
+_SENTINEL_TAIL = re.compile(
+    rf"(?:{NOT_COVERED}\s*:?|{re.escape(AFFECTED_PREFIX)}|{NO_ALERT})[^\n]*",
+    re.IGNORECASE,
+)
 
 
 def strip_sentinels(reply: str) -> str:
@@ -328,18 +347,14 @@ def strip_sentinels(reply: str) -> str:
 
     Stripped *after* parsing, never before: the sentinels are how ``covered``,
     ``affected`` and ``impact_declared`` are determined, so removing them earlier
-    would discard the meaning rather than relocate it.
+    would discard the meaning rather than relocate it into those fields.
 
-    Line-scoped, matching how the parsers read them. Returns an empty string when
-    a reply is nothing but markers, which lets callers substitute something a
-    reader can use.
+    Returns an empty string when a reply is nothing but markers, which lets
+    callers substitute something a reader can actually use.
     """
-    kept = [
-        line
-        for line in reply.splitlines()
-        if not line.strip().upper().startswith(SENTINEL_PREFIXES)
-    ]
-    return "\n".join(kept).strip()
+    cleaned = _SENTINEL_TAIL.sub("", reply or "")
+    lines = [line.strip() for line in cleaned.splitlines()]
+    return "\n".join(line for line in lines if line).strip()
 
 
 def strip_alert_markers(reply: str) -> str:

@@ -574,3 +574,33 @@ def test_an_answer_keeps_its_prose_when_the_model_adds_a_sentinel_line() -> None
 
     assert NOT_COVERED not in answer.answer
     assert "No interest is payable [1]." in answer.answer
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        # The form that leaked: a sentinel appended to prose, not starting a line.
+        (
+            "The rules govern banks, so the holding is unaffected [1]. AFFECTED: none",
+            "The rules govern banks, so the holding is unaffected [1].",
+        ),
+        # Observed from qwen3:4b — one line, two sentinels, the second trailing.
+        ("NOT_COVERED: The sources do not specify the impact. AFFECTED: none", ""),
+        ("Risk weights rise [1]. NO_ALERT", "Risk weights rise [1]."),
+        # The ordinary word must survive: only "AFFECTED:" with its colon is a marker.
+        ("The affected holdings are listed below.", "The affected holdings are listed below."),
+    ],
+)
+def test_sentinels_are_stripped_wherever_the_model_puts_them(reply: str, expected: str) -> None:
+    assert prompts.strip_sentinels(reply) == expected
+
+
+def test_a_refusal_detail_does_not_trail_another_sentinel() -> None:
+    """This string is shown to the reader as the finding, so it must be clean."""
+    reply = "NOT_COVERED: The sources do not specify the impact on Godrej. AFFECTED: none"
+    assert prompts.refusal_detail(reply) == "The sources do not specify the impact on Godrej."
+
+
+def test_a_refusal_is_detected_even_when_it_does_not_start_the_line() -> None:
+    """Reading a refusal as an answer is the one direction that must never fail."""
+    assert prompts.is_refusal("Some preamble. NOT_COVERED: nothing here applies")
