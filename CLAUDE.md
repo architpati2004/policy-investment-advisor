@@ -80,6 +80,7 @@ user portfolio ──> derive companies + sectors
 ## 5. Development method
 
 Built in 14 phases, one at a time, each verified before the next starts.
+All 14 are complete.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -96,7 +97,7 @@ Built in 14 phases, one at a time, each verified before the next starts.
 | 11 | FastAPI endpoints | done |
 | 12 | React frontend | done |
 | 13 | Tests | done |
-| 14 | README + demo | next |
+| 14 | README + demo | done |
 
 Test suite currently: **353 backend tests** in the default run (about 30 s) at
 96% statement coverage, **18 frontend tests** (`cd frontend && npm test`), plus 4

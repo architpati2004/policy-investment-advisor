@@ -1,74 +1,34 @@
-# Policy-Based Investment Advisor (RAG)
+# Policy-Based Investment Advisor
 
-A fully local, retrieval-augmented research assistant that reads government and
-regulatory policy (RBI circulars, SEBI regulations, Budget documents) and company
-filings, and answers questions about them **against a specific portfolio** — with
-citations, and with the ability to say that the sources do not answer the question.
+A retrieval-augmented research assistant that reads financial regulation, company
+filings and news against a specific portfolio, and answers questions about them
+with citations — or says the documents do not answer the question.
 
-Everything runs offline on an Apple Silicon MacBook Air using **Ollama** for
-inference and **FAISS** for vector search. No OpenAI key, no Anthropic key, no paid
-vector database, no paid news API.
+It runs entirely on a MacBook Air M1: **Ollama** for generation and embeddings,
+**FAISS** for vector search, SQLite for the portfolio. No OpenAI key, no
+Anthropic key, no paid vector database, no paid news API, no network calls at all
+except fetching the RSS feeds you configure.
 
-> An educational research tool. Answers are grounded in the documents you index and
-> cite the chunks they came from; they are not financial advice. The portfolio
-> tracks **cost basis only** — there is no price feed, so nothing here is a
-> valuation.
+> Educational research tool. Answers are grounded in whatever you have indexed
+> and cite the chunks they came from. The portfolio tracks **cost basis only** —
+> there is no price feed, so nothing here is a valuation. Not investment advice.
 
-Two properties matter more than feature count, and both are tested:
+## What it does, and what it refuses to do
 
-- **It refuses.** Asked something the indexed documents cannot answer — NBFC deposit
-  rules when the corpus holds only commercial-bank rules — it replies `NOT_COVERED`
-  rather than applying one set of rules to an institution they were not written for.
-- **It verifies its own output.** A citation pointing at a source that was never
-  supplied is recorded as invalid rather than resolved to some other chunk, and an
-  answer that cites nothing is reported as ungrounded.
+Two behaviours matter more than the feature list, and both are tested:
 
-**[CLAUDE.md](CLAUDE.md) is the companion document**: it records why each design
-decision was made, the measurements behind them, and — in section 11 — the known
-defects that are still unfixed. Read it before trusting any number this system
-produces.
+**It refuses.** Asked what deposit rates an NBFC may offer when the corpus holds
+only commercial-bank rules, it answers `NOT_COVERED: the sources govern
+commercial banks, not NBFCs` rather than applying one institution's rules to
+another. This case is hard precisely because retrieval looks confident: those
+bank chunks score **0.539**, higher than three questions the corpus genuinely
+answers. No relevance threshold can separate them, so the judgement is asked of
+the model and verified in code.
 
----
-
-## Status
-
-Phases 1-8 are complete. Phases 9-14 are not started.
-
-| Phase | Scope | Status |
-| --- | --- | --- |
-| 1 | Project structure + environment | ✅ done |
-| 2 | Local Ollama connection | ✅ done |
-| 3 | PDF ingestion | ✅ done |
-| 4 | Embeddings + policy FAISS index | ✅ done |
-| 5 | Policy RAG | ✅ done |
-| 6 | Company FAISS index | ✅ done |
-| 7 | Portfolio database | ✅ done |
-| 8 | Portfolio-aware RAG | ✅ done |
-| 9 | News ingestion (RSS) | pending |
-| 10 | Alert engine | pending |
-| 11 | FastAPI endpoints | pending |
-| 12 | React frontend | pending |
-| 13 | Tests | pending |
-| 14 | README + demo | pending |
-
-Test suite: **234 tests** in the default run (~25 s), plus 4 marked `slow` that run
-real local generation (`pytest -m slow`, ~2 minutes). Live tests skip themselves
-when Ollama is not running.
-
----
-
-## Stack
-
-| Layer | Choice |
-| --- | --- |
-| LLM | Ollama + Qwen — `qwen3:1.7b` for development, `qwen3:4b` for quality |
-| Embeddings | Ollama + `embeddinggemma` (768 dimensions) |
-| Vector store | FAISS — two independent indexes (policy, company), cosine similarity |
-| Orchestration | LangChain (`langchain-core`, `langchain-community`, `langchain-ollama`) |
-| Ingestion | pypdf, custom cleaning and chunking |
-| Database | SQLite + SQLAlchemy 2.0 |
-| Backend | FastAPI + Pydantic (system endpoints only until Phase 11) |
-| Frontend | React + Vite (Phase 12) |
+**It verifies its own output.** A citation pointing at a source that was never
+supplied is recorded as invalid rather than resolved to some other chunk. An
+answer citing nothing is reported as ungrounded. An alert whose only evidence is
+the company's own annual report is discarded, because nothing in a filing is new.
 
 ---
 
@@ -77,239 +37,219 @@ when Ollama is not running.
 ### 1. Python and dependencies
 
 ```bash
-cd policy-investment-advisor
-
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-
+python3 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip && pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Shortcuts: `make setup`, `make env`. Python 3.11 or 3.12.
+Python 3.11 or 3.12. Shortcuts: `make setup`, `make env`.
 
 ### 2. Ollama
 
-Install from <https://ollama.com> and leave the server running:
+Install from <https://ollama.com> — on macOS 14 the Homebrew formula wants to
+build from source — then leave the server running:
 
 ```bash
 ollama serve
 ```
 
-On macOS 14 the Homebrew formula wants to build from source; the packaged
-installer from ollama.com is the working route.
-
 ### 3. Models
 
 ```bash
-make models
+make models      # three pulls, one model per invocation
 ```
 
-which is the three pulls, one model per invocation:
+| model | size | role |
+| --- | --- | --- |
+| `qwen3:1.7b` | 1.4 GB | development and alerts (~25 s per answer) |
+| `qwen3:4b` | 2.5 GB | quality checks and demos (~125 s per answer) |
+| `embeddinggemma` | 0.6 GB | embeddings for all three indexes, 768 dimensions |
 
-```bash
-ollama pull qwen3:1.7b      # ~1.4 GB, the development model
-ollama pull qwen3:4b        # ~2.5 GB, for quality checks and demos
-ollama pull embeddinggemma  # ~0.6 GB, embeddings for both indexes
-```
-
-`.env` ships with `qwen3:1.7b`, which answers in roughly 25 s against ~125 s for
-`qwen3:4b`. Develop on the small one; switch to `qwen3:4b` — and raise
-`LLM_TIMEOUT_SECONDS` to `300` — before judging answer quality or recording a demo.
-CLAUDE.md §11 explains what the small model costs you (looser citations) and why
-prompt changes must always be checked on 4b.
+`.env` ships with 1.7b. Switch `LLM_MODEL` to `qwen3:4b` — and raise
+`LLM_TIMEOUT_SECONDS` to `300` — before judging answer quality. See
+[CLAUDE.md](CLAUDE.md) §11 for what the small model costs you.
 
 ### 4. Verify
 
 ```bash
 python scripts/check_setup.py     # environment and imports
 python scripts/check_ollama.py    # server, models, one timed generation
-pytest                            # 234 tests
+pytest                            # 353 tests, ~30 s
 ```
 
 ---
 
 ## Using it
 
-The three CLIs below build the two indexes and then ask questions against them.
-Each has `--help`.
+### Index your documents
 
-### Build the policy index
-
-Put RBI/SEBI/Budget PDFs in `data/policies/`. A filename beginning with a known
-publisher (`RBI_…`, `SEBI_…`) is attributed automatically; otherwise pass
-`--source`.
-
-```bash
-python scripts/build_policy_index.py build          # or: make index
-python scripts/build_policy_index.py build --rebuild
-python scripts/build_policy_index.py query "can a bank pay interest on a current account?"
-python scripts/build_policy_index.py stats          # or: make index-stats
-```
-
-Re-running only embeds what is new — chunk ids are content-hashed, so an unchanged
-document is skipped rather than duplicated. Four RBI circulars (~30 pages) produce
-about 73 chunks in a few seconds.
-
-To ask a policy question and get a written, cited answer rather than raw chunks:
-
-```bash
-python scripts/ask_policy.py "what are the interest rate rules for deposits at commercial banks?"
-```
-
-### Build the company index
-
-Declare each company once in `data/companies/registry.json`, then drop its filings
-in `data/companies/`:
+Drop RBI/SEBI/Budget PDFs in `data/policies/`, company filings in
+`data/companies/`, and declare each company once in
+`data/companies/registry.json`:
 
 ```json
-[
-  {
-    "ticker": "GODREJCP",
-    "name": "Godrej Consumer Products",
-    "sector": "FMCG",
-    "aliases": ["godrej consumer", "gcpl"]
-  }
-]
+[{ "ticker": "GODREJCP", "name": "Godrej Consumer Products",
+   "sector": "FMCG", "aliases": ["godrej consumer", "gcpl"] }]
 ```
 
 ```bash
+python scripts/build_policy_index.py build      # or: make index
 python scripts/build_company_index.py build
-python scripts/build_company_index.py query "what drove revenue growth?" --company GODREJCP
-python scripts/build_company_index.py query "input cost inflation" --sector FMCG
-python scripts/build_company_index.py companies     # declared vs indexed
+python scripts/build_news_index.py build        # RSS feeds from data/news/feeds.json
 ```
 
-The registry resolves whatever filename a filing arrives with — `godrej consumer.pdf`,
-`GODREJCP_AR_2025.pdf` and `gcpl.pdf` all match the same company. A file that cannot
-be attributed is **refused**, not indexed: a chunk with no company can never be
-matched to a holding, but could still surface in a search and be cited. A 589-page
-annual report yields ~1,776 chunks in about 3 minutes.
+Re-running only embeds what is new: chunk ids are content-hashed, so an unchanged
+document is skipped rather than duplicated. Roughly: four RBI circulars → 73
+chunks in seconds; a 589-page annual report → 1,776 chunks in about 3 minutes.
 
-### Assess a question against the portfolio
-
-Create a portfolio first — `assess` needs one:
+### Build a portfolio
 
 ```bash
-python scripts/portfolio.py init        # create tables, import the registry
-python scripts/portfolio.py seed-demo   # illustrative 150 GODREJCP at 1180.50
-python scripts/portfolio.py add --ticker GODREJCP --quantity 150 --cost 1180.50
-python scripts/portfolio.py list        # holdings, cost basis, weights
-python scripts/portfolio.py scope       # the companies and sectors retrieval uses
+python scripts/portfolio.py init        # tables + import the registry
+python scripts/portfolio.py seed-demo   # illustrative 150 GODREJCP at ₹1180.50
+python scripts/portfolio.py list
+python scripts/portfolio.py scope       # what retrieval narrows to
 ```
 
-Then:
+### Ask
 
 ```bash
-python scripts/assess.py "do the new commercial bank deposit rate rules affect my holdings?"
-python scripts/assess.py "what regulatory risks affect consumer goods?" --show-context
+python scripts/ask_policy.py "can a bank pay interest on a current account?"
+python scripts/assess.py "do the new deposit rate rules affect my holdings?"
+python scripts/alerts.py run            # one generation per holding
 ```
 
-`assess` derives the companies and sectors you hold, searches the policy index
-(unscoped) and the company index (narrowed to your holdings), merges the two under
-a quota so neither can crowd the other out, and reports which holdings the sources
-show are affected — and which are not. Expect ~25 s on `qwen3:1.7b`.
-
-### Run the API
+### Run the app
 
 ```bash
-uvicorn backend.main:app --reload     # or: make run
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/api/system/ollama
+uvicorn backend.main:app --reload      # terminal 1 — API on :8000, docs at /docs
+cd frontend && npm install && npm run dev   # terminal 2 — UI on :5173
 ```
 
-System endpoints only for now: health, configuration, and local-inference status
-(200 ready, 503 server down, 424 model not pulled). Feature routes arrive in
-Phase 11.
+Vite binds IPv6, so use `localhost:5173` rather than `127.0.0.1:5173`.
 
 ---
 
-## Configuration
+## Architecture
 
-Everything lives in `.env`, loaded by `backend/config.py` into a typed `Settings`
-object. No model name, URL or path is hard-coded anywhere else.
+```
+                    ┌──────────────┐
+   portfolio ──────▶│ companies +  │
+   (SQLite)         │ sectors      │
+                    └──────┬───────┘
+                           │ scope
+        ┌──────────────────┼──────────────────┐
+        ▼                  ▼                  ▼
+  policy_index       company_index       news_index      three FAISS indexes,
+  (regulation)       (filings)           (RSS)           cosine similarity
+        │                  │                  │
+        └──────────────────┼──────────────────┘
+                           ▼
+                   relevance floors          absolute + corpus-scaling
+                           ▼
+                    quota merge              each corpus guaranteed a share
+                           ▼
+                  grounding prompt           cites, or refuses
+                           ▼
+                   qwen3 via Ollama
+                           ▼
+        answer + verified citations + impact assessment
+```
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama server |
-| `LLM_MODEL` | `qwen3:1.7b` | Generation model (`qwen3:4b` for quality) |
-| `EMBEDDING_MODEL` | `embeddinggemma` | Embedding model |
-| `LLM_TEMPERATURE` | `0.1` | Low, to reduce fabrication |
-| `LLM_TIMEOUT_SECONDS` | `180` | Wall clock on a generation; use `300` for 4b |
-| `LLM_NUM_CTX` | `8192` | Context window |
-| `EMBEDDING_BATCH_SIZE` | `16` | Texts per embedding request |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1000` / `150` | Text splitting |
-| `RETRIEVAL_TOP_K` | `5` | Chunks per retriever |
-| `MIN_RELEVANCE_SCORE` | `0.35` | Absolute floor: below it, the corpus is not about the question |
-| `RELATIVE_RELEVANCE_RATIO` | `0.75` | Keep chunks within this fraction of the best match |
-| `DATA_DIR` | `data` | Source documents |
-| `VECTORSTORE_DIR` | `backend/vectorstore` | FAISS indexes |
-| `DATABASE_URL` | `sqlite:///data/app.db` | SQLite database |
-
-The two relevance floors do different jobs, and the second is what scales as a
-corpus grows. CLAUDE.md §11 has the measurements, including why **no** absolute
-score can separate a question the corpus answers from a near-identical one it
-cannot.
+```
+backend/
+├── config.py          typed settings; nothing hard-codes a model or path
+├── exceptions.py      every error carries the command that fixes it
+├── ingestion/         PDF loading, cleaning, chunking, company registry, RSS
+├── rag/               embeddings, FAISS, retrieval policy, prompts, two chains
+├── db/                SQLAlchemy models, sessions, portfolio, alerts
+├── alerts/            the alert engine
+└── api/               FastAPI routers, schemas, dependencies
+frontend/src/
+├── services/          every network call; nothing else imports fetch
+├── components/        progress, result card, sources, portfolio context
+└── pages/             chat, dashboard, alerts, portfolio, documents
+```
 
 ---
 
-## Project layout
+## Design decisions
 
-```
-policy-investment-advisor/
-├── CLAUDE.md                 # design decisions, measurements, known defects
-├── backend/
-│   ├── config.py             # typed settings from .env
-│   ├── exceptions.py         # error hierarchy, each with a remediation string
-│   ├── main.py               # FastAPI factory
-│   ├── api/system.py         # /health, /api/config, /api/system/ollama
-│   ├── ingestion/            # PDF loading, cleaning, chunking, company registry
-│   ├── rag/
-│   │   ├── ollama_client.py  # connection, model checks, generation deadline
-│   │   ├── embeddings.py     # batched, unit-normalised embeddings
-│   │   ├── vector_store.py   # FAISS persistence, dedupe, scored search
-│   │   ├── retrieval.py      # relevance floors, scoping, context merging
-│   │   ├── prompts.py        # grounding prompts and refusal sentinels
-│   │   ├── policy_rag.py     # Phase 5 chain
-│   │   └── portfolio_rag.py  # Phase 8 chain
-│   ├── db/                   # SQLAlchemy models, sessions, portfolio operations
-│   ├── alerts/               # Phase 10
-│   └── vectorstore/          # FAISS indexes (gitignored)
-├── data/                     # source documents (gitignored except the registry)
-├── scripts/                  # the CLIs described above
-└── tests/                    # one module per phase
-```
+Each of these was measured, and each is recorded with its evidence in
+[CLAUDE.md](CLAUDE.md) §11.
 
-Boundaries kept throughout: LangChain imports stay in `backend/rag/`, ingestion
-never imports retrieval, and SQLAlchemy models stay out of route modules.
+**Two relevance floors, not one.** An absolute floor (0.35) rejects questions the
+corpus is not about; a relative floor (0.75 of the best match) drops the tail and
+is the part that scales, because the bar rises as the corpus improves. Neither
+can catch the adjacent case — that is the prompt's job.
 
----
+**Three indexes, not one.** Merging corpora by raw score is winner-take-all: on
+real questions it produced 5-0 and 0-5 splits, one corpus shutting the other out
+entirely. Each is guaranteed a share of the context instead, because an impact
+assessment needs the rule and the holding in front of the model at once.
 
-## Make targets
+**Recency applies to news only.** A circular that has not been amended binds as
+much today as when it was published; an article is a claim about a moment. News
+decays with a 45-day half-life and a floor, and decay reorders — never filters —
+so an old article that clears the relevance floor still appears.
 
-```
-make setup     # venv + dependencies        make index       # build the policy index
-make env       # .env from the example      make index-stats # describe it
-make models    # pull the three models      make test        # pytest
-make run       # start the dev server       make verify      # setup checker
-make clean     # remove venv and caches     make verify-ollama
-```
+**Money is stored as integers.** Paise and thousandths of a share. SQLite has no
+decimal type, so a `Numeric` column round-trips through a float, and a portfolio
+multiplies and sums these constantly.
+
+**Alerts iterate holdings, not documents.** Company attribution on live RSS runs
+at about 2.5%, so an engine triggered by "an article names your company" would be
+silent for reasons unrelated to whether anything happened. Cost is bounded by
+portfolio size: one holding, one local generation.
+
+**Prompt wording dominates local latency.** A five-rule prompt generated 2,237
+tokens where a four-line one generated 259 — 265 s against 45 s, same question,
+same context. Halving the context changed nothing.
+
+**A refusal is a result, not an error.** The API returns 200 with the finding in
+the body and the UI renders it as a neutral card, because the refusal text
+routinely *is* the answer: "the sources govern commercial banks, so this does not
+reach an FMCG holding."
 
 ---
 
 ## Known limitations
 
-Recorded in full, with evidence, in [CLAUDE.md](CLAUDE.md) §11. The ones that would
-mislead you first:
+The full list, with evidence, is in [CLAUDE.md](CLAUDE.md) §11. The ones that
+would mislead you first:
 
-- **Financial figures cannot be trusted yet.** Table extraction drops column
-  headers, so a chunk reads `Net profit margin (%) 7.83% 20.10` — two years with
-  nothing saying which is which.
-- **Marketing prose outranks disclosure** in the company index; "what drove revenue
-  growth?" returns aspirational filler above the actual figures.
-- **No-impact answers cite nothing.** When the conclusion is that a holding is
-  unaffected, the answer comes back ungrounded on both models — and those are
-  precisely the assessments Phase 10 will build alerts on.
+- **Financial figures cannot be trusted.** Table extraction drops column headers,
+  so a chunk reads `Net profit margin (%) 7.83% 20.10` — two years, nothing
+  saying which is which. A model citing it will state the wrong year confidently.
+- **Marketing prose outranks disclosure** in the company index: "what drove
+  revenue growth?" returns aspirational filler above the actual figures.
+- **No-impact answers cite nothing** on both models, so the assessments alerts are
+  built from are the least verifiable the system produces.
 - **The two models disagree** about whether "no impact" is an answer or a refusal,
-  with the larger one more conservative. Read the reason, not just the label.
+  with the larger one more conservative — read the reason, not the label. And
+  1.7b is the likelier of the two to manufacture an applicability link.
+- **`qwen3:4b` cannot write an alert summary** within a workable deadline: terse
+  enough to finish and the output is empty, verbose enough to explain and it
+  times out. Alerts run on 1.7b for this reason.
+- **News attribution is ~2.5%** on general market feeds. Per-company feeds would
+  raise it; the engine deliberately does not depend on it.
+
+---
+
+## Development
+
+```
+make test          # 353 backend tests, ~30 s
+make test-slow     # 4 live-generation tests, ~2 minutes
+make coverage      # 96% of backend statements
+make frontend-test # 18 frontend tests
+```
+
+Backend tests need neither Ollama nor a network: a deterministic in-process
+embedding model means the FAISS indexes under test are real indexes. Tests that
+do need a live model skip themselves when one is not running.
+
+Conventions worth keeping are in [CLAUDE.md](CLAUDE.md) §10 — typed settings,
+LangChain confined to `backend/rag/`, ingestion separate from retrieval, database
+models out of routes, and modules imported *as modules* where tests need to
+substitute them.
